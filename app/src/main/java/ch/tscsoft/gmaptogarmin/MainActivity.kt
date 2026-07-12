@@ -127,16 +127,17 @@ class MapViewModel : ViewModel() {
                         
                         // Hauptroute immer hinzufügen (auch wenn BRouter keine Änderung vornimmt)
                         //options.add(RouteOption("$profileName (Hauptroute)", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
-                        options.add(RouteOption("Route  ", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
+                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
                         
                         // Fetch Alternatives 1, 2, 3
                         for (i in 1..3) {
                             status = "Berechne $profileName Alternative $i..."
                             val altRoute = getBikeRoute(points, bikeProfile, i)
+                            val j = i+1
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
                                 //options.add(RouteOption("$profileName (Alternative $i)", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
-                                options.add(RouteOption("Route $i", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
+                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
                             }
                         }
                     }
@@ -607,10 +608,10 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
     val htmlContent = remember(options, currentProfile) {
         val jsonString = options.joinToString(",", prefix = "[", postfix = "]") { opt ->
             val coords = opt.points.joinToString(",") { "[${it.first},${it.second}]" }
-            var color = if (opt.isOriginal) "#666666" else if (opt.title.equals("Route  ")) "#0000FF" else "#FF8800"
-            color = if (opt.title.equals("Route 1")) "#FF00FF" else color
-            color = if (opt.title.equals("Route 2")) "#00FFFF" else color
-            color = if (opt.title.equals("Route 3")) "#FF8800" else color
+            var color = if (opt.isOriginal) "#666666" else if (opt.title.equals("Route 1")) "#0000FF" else "#FF8800"
+            color = if (opt.title.equals("Route 2")) "#FF00FF" else color
+            color = if (opt.title.equals("Route 3")) "#00FFFF" else color
+            color = if (opt.title.equals("Route 4")) "#FF8800" else color
             
             val inputPoints = opt.inputPoints.ifEmpty { opt.points }
             val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
@@ -621,7 +622,7 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
             
             """{"title":"${opt.title}","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
         }
-        
+
         """
         <!DOCTYPE html>
         <html>
@@ -676,10 +677,10 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                     // Simplify Label Text
                     var labelText = "Route";
                     if (route.isOriginal) labelText = "Google";
-                    else if (route.title.includes("Route  ")) labelText = "Route";
-                    else if (route.title.includes("Route 1")) labelText = "Route 1";
-                    else if (route.title.includes("Route 2")) labelText = "Route 2";
-                    else if (route.title.includes("Route 3")) labelText = "Route 3";
+                    else if (route.title.includes("Route 1")) labelText = " R1 ";
+                    else if (route.title.includes("Route 2")) labelText = " R2";
+                    else if (route.title.includes("Route 3")) labelText = " R3 ";
+                    else if (route.title.includes("Route 4")) labelText = " R4 ";
                     
                     // Add permanent label
                     if (route.points.length > 2) {
@@ -759,7 +760,7 @@ fun RouteOptionCard(
                 )
 
                 OutlinedButton(onClick = onPreview, modifier = Modifier.weight(2f)) {
-                    Text("Vorschau")
+                    Text("Detail")
                 }
                 Button(onClick = onShare, modifier = Modifier.weight(2f)) {
                     Text("Öffnen")
