@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +22,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.view.ViewGroup
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.viewinterop.AndroidView
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,24 +43,28 @@ import kotlinx.serialization.json.*
 
 private val jsonParser = Json { ignoreUnknownKeys = true }
 
+data class RouteOption(
+    val title: String,
+    val points: List<Pair<Double, Double>>,
+    val gpxContent: String,
+    val isOriginal: Boolean = false,
+    val inputPoints: List<Pair<Double, Double>> = emptyList(),
+    val alternativeIdx: Int = 0
+)
+
 class MapViewModel : ViewModel() {
     private var prefs: android.content.SharedPreferences? = null
     private var lastSharedText: String? = null
 
     var status by mutableStateOf("Warte auf Google Maps Link...")
         private set
-    var gpxUri by mutableStateOf<Uri?>(null)
-        private set
-    var shareUri by mutableStateOf<Uri?>(null)
-        private set
     var isProcessing by mutableStateOf(value = false)
         private set
     var debugUrl by mutableStateOf<String?>(null)
         private set
     var bikeProfile by mutableStateOf("fastbike")
-    var lastPoints by mutableStateOf<List<Pair<Double, Double>>>(emptyList())
-        private set
-    var lastInputPoints by mutableStateOf<List<Pair<Double, Double>>>(emptyList())
+    
+    var routeOptions by mutableStateOf<List<RouteOption>>(emptyList())
         private set
 
     fun initPrefs(context: android.content.Context) {
@@ -67,7 +78,6 @@ class MapViewModel : ViewModel() {
         bikeProfile = newProfile
         prefs?.edit()?.putString("bike_profile", newProfile)?.apply()
         
-        // Re-process if we have a last shared text
         lastSharedText?.let {
             processSharedText(it, context)
         }
@@ -85,13 +95,14 @@ class MapViewModel : ViewModel() {
 
         isProcessing = true
         status = "Verarbeite Route..."
+        routeOptions = emptyList()
+
         viewModelScope.launch {
             try {
                 var resolvedUrl = resolveUrl(url)
                 debugUrl = resolvedUrl
                 var points = extractAllCoordinates(resolvedUrl)
                 
-                // Retry once if no points found (sometimes resolution fails on first try)
                 if (points.isEmpty() && resolvedUrl.contains("goo.gl")) {
                     status = "Erneuter Versuch der URL-Auflösung..."
                     kotlinx.coroutines.delay(800)
@@ -100,40 +111,40 @@ class MapViewModel : ViewModel() {
                     points = extractAllCoordinates(resolvedUrl)
                 }
 
-                if (points.size >= 2) {
-                    lastInputPoints = points
-                    val finalPoints = if (bikeProfile == "direct") {
-                        status = "Übernehme Google Punkte..."
-                        points
+                if (points.isNotEmpty()) {
+                    val options = mutableListOf<RouteOption>()
+                    
+                    if (bikeProfile == "direct" || points.size < 2) {
+                        // Nur die Original-Punkte anzeigen
+                        val googleGpx = createGpx(points)
+                        options.add(RouteOption("Google Punkte", points, googleGpx, true, points))
                     } else {
-                        val profileName = when(bikeProfile) {
-                            "fastbike" -> "Rennrad"
-                            "mtb" -> "Mountainbike"
-                            else -> "Trekking"
+                        val profileName = getProfileLabel(bikeProfile)
+                        
+                        // Fetch Alternative 0 (Main)
+                        status = "Berechne $profileName..."
+                        val mainRoute = getBikeRoute(points, bikeProfile, 0)
+                        
+                        // Hauptroute immer hinzufügen (auch wenn BRouter keine Änderung vornimmt)
+                        //options.add(RouteOption("$profileName (Hauptroute)", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
+                        options.add(RouteOption("Route  ", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
+                        
+                        // Fetch Alternatives 1, 2, 3
+                        for (i in 1..3) {
+                            status = "Berechne $profileName Alternative $i..."
+                            val altRoute = getBikeRoute(points, bikeProfile, i)
+                            // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
+                            if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
+                                //options.add(RouteOption("$profileName (Alternative $i)", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
+                                options.add(RouteOption("Route $i", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
+                            }
                         }
-                        status = "Berechne $profileName-Route..."
-                        getBikeRoute(points, bikeProfile)
                     }
                     
-                    lastPoints = finalPoints
-                    val gpxContent = createGpx(finalPoints)
-                    gpxUri = saveGpxToDownloads(gpxContent, context.contentResolver)
-                    shareUri = prepareShareUri(gpxContent, context)
-                    
-                    status = when {
-                        bikeProfile == "direct" -> "Google Punkte übernommen (${finalPoints.size} Punkte)!"
-                        finalPoints.size > points.size -> "Route erstellt (${finalPoints.size} Punkte)!"
-                        else -> "Routing fehlgeschlagen, nutze Luftlinie."
-                    }
-                } else if (points.size == 1) {
-                    lastInputPoints = points
-                    lastPoints = points
-                    val gpxContent = createGpx(points)
-                    gpxUri = saveGpxToDownloads(gpxContent, context.contentResolver)
-                    shareUri = prepareShareUri(gpxContent, context)
-                    status = "Wegpunkt erstellt!"
+                    routeOptions = options
+                    status = "Route bereit!"
                 } else {
-                    status = "Keine Koordinaten gefunden. Tippe auf ein Profil zum Erneuern."
+                    status = "Keine Koordinaten gefunden."
                 }
             } catch (e: Exception) {
                 status = "Fehler: ${e.localizedMessage ?: e.message}"
@@ -143,11 +154,24 @@ class MapViewModel : ViewModel() {
         }
     }
 
-    private suspend fun getBikeRoute(points: List<Pair<Double, Double>>, profile: String): List<Pair<Double, Double>> = withContext(Dispatchers.IO) {
+    private fun getProfileLabel(id: String) = when(id) {
+        "fastbike" -> "Rennrad"
+        "mtb" -> "Mountainbike"
+        "trekking" -> "Trekking"
+        "shortest" -> "Kürzeste"
+        "safety" -> "Sicherste"
+        "hiking-soft" -> "Wandern"
+        "hiking-mountain" -> "Bergwandern"
+        "vm-forum" -> "Velomobil"
+        "moped" -> "Mofa/Moped"
+        "car-test" -> "PKW"
+        else -> id
+    }
+
+    private suspend fun getBikeRoute(points: List<Pair<Double, Double>>, profile: String, altIdx: Int = 0): List<Pair<Double, Double>> = withContext(Dispatchers.IO) {
         try {
-            // BRouter coordinates are lon,lat separated by |
             val coordsString = points.joinToString("|") { "${it.second},${it.first}" }
-            val urlString = "https://brouter.de/brouter?lonlats=$coordsString&profile=$profile&alternativeidx=0&format=geojson"
+            val urlString = "https://brouter.de/brouter?lonlats=$coordsString&profile=$profile&alternativeidx=$altIdx&format=geojson"
             
             val url = URL(urlString)
             val connection = url.openConnection() as HttpURLConnection
@@ -169,15 +193,33 @@ class MapViewModel : ViewModel() {
                 if (coordinates != null && coordinates.size > 2) {
                     return@withContext coordinates.map {
                         val point = it.jsonArray
-                        // GeoJSON returns [lon, lat]
                         point[1].jsonPrimitive.double to point[0].jsonPrimitive.double
                     }
                 }
             }
         } catch (e: Exception) {
-            // Fallback
         }
         points
+    }
+
+    suspend fun shareGpx(option: RouteOption, context: android.content.Context) {
+        val uri = prepareShareUri(option.gpxContent, context)
+        if (uri != null) {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/gpx+xml")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                context.startActivity(Intent.createChooser(intent, "GPX öffnen mit..."))
+            } catch (e: Exception) {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/gpx+xml"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "GPX teilen"))
+            }
+        }
     }
 
     private suspend fun prepareShareUri(content: String, context: android.content.Context): Uri? = withContext(Dispatchers.IO) {
@@ -420,112 +462,134 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(false) }
     
+    val profiles = listOf(
+        "fastbike" to "Rennrad",
+        "trekking" to "Trekking",
+        "mtb" to "MTB",
+        "shortest" to "Kürzeste",
+        "safety" to "Sicherste",
+        "vm-forum" to "Velomobil",
+        "hiking-soft" to "Wandern",
+        "hiking-mountain" to "Bergwandern",
+        "moped" to "Mofa/Moped",
+        "car-test" to "PKW (Test)",
+        "direct" to "Google URL (nur Punkte)"
+    )
+    
+    val currentLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
+
     Column(
-        modifier = modifier.fillMaxSize().padding(16.dp),
+        modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             text = "Google Maps to GPX",
             style = MaterialTheme.typography.headlineMedium,
         )
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Text("Fahrrad-Profil auswählen:", style = MaterialTheme.typography.labelLarge)
-        FlowRow(
-            modifier = Modifier.padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = viewModel.bikeProfile == "fastbike",
-                onClick = { if (!viewModel.isProcessing) viewModel.updateProfile("fastbike", context) },
-                label = { Text("Rennrad") }
-            )
-            FilterChip(
-                selected = viewModel.bikeProfile == "mtb",
-                onClick = { if (!viewModel.isProcessing) viewModel.updateProfile("mtb", context) },
-                label = { Text("MTB") }
-            )
-            FilterChip(
-                selected = viewModel.bikeProfile == "trekking",
-                onClick = { if (!viewModel.isProcessing) viewModel.updateProfile("trekking", context) },
-                label = { Text("Trekking") }
-            )
-            FilterChip(
-                selected = viewModel.bikeProfile == "direct",
-                onClick = { if (!viewModel.isProcessing) viewModel.updateProfile("direct", context) },
-                label = { Text("Google URL") }
-            )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(0.dp)) {
+                //Text("Routing-Profil:", style = MaterialTheme.typography.labelLarge)
+
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { if (!viewModel.isProcessing) expanded = !expanded },
+                    modifier = Modifier.padding(vertical = 0.dp)
+                ) {
+                    OutlinedTextField(
+                        value = currentLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        profiles.forEach { (id, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    viewModel.updateProfile(id, context)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
         
         Text(
             text = viewModel.status,
             style = MaterialTheme.typography.bodyLarge
         )
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
+
         if (viewModel.isProcessing) {
+            Spacer(modifier = Modifier.height(16.dp))
             CircularProgressIndicator()
         }
         
-        if (viewModel.shareUri != null) {
-            Button(
-                onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(viewModel.shareUri, "application/gpx+xml")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (viewModel.routeOptions.isNotEmpty()) {
+            MapPreview(
+                options = viewModel.routeOptions,
+                currentProfile = viewModel.bikeProfile,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .clip(MaterialTheme.shapes.medium)
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        viewModel.routeOptions.forEach { option ->
+            RouteOptionCard(
+                option = option,
+                currentProfile = viewModel.bikeProfile,
+                onPreview = {
+                    val inputPoints = option.inputPoints.ifEmpty { option.points }
+                    val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
+                    val firstPoint = inputPoints.first()
                     
-                    try {
-                        context.startActivity(Intent.createChooser(intent, "GPX öffnen mit..."))
-                    } catch (e: Exception) {
-                        // Fallback to SEND if VIEW fails
-                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/gpx+xml"
-                            putExtra(Intent.EXTRA_STREAM, viewModel.shareUri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(shareIntent, "GPX teilen"))
-                    }
+                    // Use the original input points and the alternative index in the URL
+                    val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
+                    val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
+                    
+                    val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
+                    context.startActivity(intent)
                 },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("GPX öffnen")
-            }
-
+                onShare = {
+                    scope.launch { viewModel.shareGpx(option, context) }
+                }
+            )
             Spacer(modifier = Modifier.height(8.dp))
+        }
 
-            OutlinedButton(
-                onClick = {
-                    val points = viewModel.lastInputPoints
-                    if (points.isNotEmpty()) {
-                        val coordsString = points.joinToString(";") { "${it.second},${it.first}" }
-                        val firstPoint = points.first()
-                        val profile = if (viewModel.bikeProfile == "direct") "trekking" else viewModel.bikeProfile
-                        val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
-                        context.startActivity(intent)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Vorschau der Strecke")
-            }
-        } else {
+        if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
             Text(
                 text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 32.dp)
             )
-            
+
             if (viewModel.debugUrl != null) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
@@ -535,5 +599,172 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 )
             }
         }
+    }
+}
+
+@Composable
+fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Modifier = Modifier) {
+    val htmlContent = remember(options, currentProfile) {
+        val jsonString = options.joinToString(",", prefix = "[", postfix = "]") { opt ->
+            val coords = opt.points.joinToString(",") { "[${it.first},${it.second}]" }
+            var color = if (opt.isOriginal) "#666666" else if (opt.title.equals("Route  ")) "#0000FF" else "#FF8800"
+            color = if (opt.title.equals("Route 1")) "#FF00FF" else color
+            color = if (opt.title.equals("Route 2")) "#00FFFF" else color
+            color = if (opt.title.equals("Route 3")) "#FF8800" else color
+            
+            val inputPoints = opt.inputPoints.ifEmpty { opt.points }
+            val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
+            val firstPoint = inputPoints.first()
+            val profile = if (opt.isOriginal) "trekking" else currentProfile
+            val altPart = if (opt.isOriginal) "" else "&alternativeidx=${opt.alternativeIdx}"
+            val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
+            
+            """{"title":"${opt.title}","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
+        }
+        
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+            <style>
+                #map { height: 100%; width: 100%; position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+                body { margin: 0; padding: 0; }
+                .leaflet-interactive { cursor: pointer; }
+                .route-label {
+                    background: rgba(255, 255, 255, 0.9);
+                    border: 2px solid #333;
+                    border-radius: 4px;
+                    padding: 2px 6px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    white-space: nowrap;
+                    color: #000;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                    pointer-events: auto !important;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+            <script>
+                var map = L.map('map');
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OSM'
+                }).addTo(map);
+                
+                var routes = $jsonString;
+                var group = new L.featureGroup();
+                
+                routes.forEach(function(route) {
+                    var polyline = L.polyline(route.points, {
+                        color: route.color,
+                        weight: route.color === '#0000FF' ? 6 : 4,
+                        opacity: route.color === '#666666' ? 0.5 : 0.8,
+                        interactive: true
+                    }).addTo(map);
+                    
+                    var openFn = function() {
+                        if (window.Android) {
+                            window.Android.openRoute(route.previewUrl);
+                        }
+                    };
+                    
+                    polyline.on('click', openFn);
+                    
+                    // Simplify Label Text
+                    var labelText = "Route";
+                    if (route.isOriginal) labelText = "Google";
+                    else if (route.title.includes("Route  ")) labelText = "Route";
+                    else if (route.title.includes("Route 1")) labelText = "Route 1";
+                    else if (route.title.includes("Route 2")) labelText = "Route 2";
+                    else if (route.title.includes("Route 3")) labelText = "Route 3";
+                    
+                    // Add permanent label
+                    if (route.points.length > 2) {
+                        var midIdx = Math.floor(route.points.length / 2);
+                        var midPoint = route.points[midIdx];
+                        
+                        var tooltip = L.tooltip({
+                            permanent: true,
+                            direction: 'top',
+                            className: 'route-label',
+                            interactive: true
+                        })
+                        .setLatLng(midPoint)
+                        .setContent(labelText)
+                        .addTo(map);
+                        
+                        tooltip.on('click', openFn);
+                    }
+
+                    group.addLayer(polyline);
+                });
+                
+                if (routes.length > 0) {
+                    map.fitBounds(group.getBounds().pad(0.1));
+                }
+            </script>
+        </body>
+        </html>
+        """.trimIndent()
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            WebView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                settings.javaScriptEnabled = true
+                addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun openRoute(url: String) {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        context.startActivity(intent)
+                    }
+                }, "Android")
+                webViewClient = WebViewClient()
+                loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
+            }
+        },
+        update = { webView ->
+            webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
+        }
+    )
+}
+
+@Composable
+fun RouteOptionCard(
+    option: RouteOption,
+    currentProfile: String,
+    onPreview: () -> Unit,
+    onShare: () -> Unit
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        //Column(modifier = Modifier.padding(4.dp)) {
+
+            
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${option.title} ",
+                    style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(onClick = onPreview, modifier = Modifier.weight(2f)) {
+                    Text("Vorschau")
+                }
+                Button(onClick = onShare, modifier = Modifier.weight(2f)) {
+                    Text("Öffnen")
+                }
+            }
+       // }
     }
 }
