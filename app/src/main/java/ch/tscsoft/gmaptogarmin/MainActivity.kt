@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.viewinterop.AndroidView
@@ -51,7 +52,15 @@ data class RouteOption(
     val gpxContent: String,
     val isOriginal: Boolean = false,
     val inputPoints: List<Pair<Double, Double>> = emptyList(),
-    val alternativeIdx: Int = 0
+    val alternativeIdx: Int = 0,
+    val distanceMeters: Double = 0.0,
+    val elevationGain: Int = 0
+)
+
+data class BRouterResult(
+    val points: List<Pair<Double, Double>>,
+    val distance: Double = 0.0,
+    val elevation: Int = 0
 )
 
 class MapViewModel : ViewModel() {
@@ -119,27 +128,27 @@ class MapViewModel : ViewModel() {
                     if (bikeProfile == "direct" || points.size < 2) {
                         // Nur die Original-Punkte anzeigen
                         val googleGpx = createGpx(points)
-                        options.add(RouteOption("Google Punkte", points, googleGpx, true, points))
+                        val dist = calculateDistance(points)
+                        options.add(RouteOption("Google Punkte", points, googleGpx, true, points, distanceMeters = dist))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
                         // Fetch Alternative 0 (Main)
                         status = "Berechne $profileName..."
-                        val mainRoute = getBikeRoute(points, bikeProfile, 0)
+                        val mainResult = getBikeRoute(points, bikeProfile, 0)
+                        val mainRoute = mainResult.points
                         
-                        // Hauptroute immer hinzufügen (auch wenn BRouter keine Änderung vornimmt)
-                        //options.add(RouteOption("$profileName (Hauptroute)", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
-                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0))
+                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevation))
                         
                         // Fetch Alternatives 1, 2, 3
                         for (i in 1..3) {
                             status = "Berechne $profileName Alternative $i..."
-                            val altRoute = getBikeRoute(points, bikeProfile, i)
+                            val altResult = getBikeRoute(points, bikeProfile, i)
+                            val altRoute = altResult.points
                             val j = i+1
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                //options.add(RouteOption("$profileName (Alternative $i)", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
-                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i))
+                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevation))
                             }
                         }
                     }
@@ -171,7 +180,24 @@ class MapViewModel : ViewModel() {
         else -> id
     }
 
-    private suspend fun getBikeRoute(points: List<Pair<Double, Double>>, profile: String, altIdx: Int = 0): List<Pair<Double, Double>> = withContext(Dispatchers.IO) {
+    private fun calculateDistance(points: List<Pair<Double, Double>>): Double {
+        var total = 0.0
+        for (i in 0 until points.size - 1) {
+            val p1 = points[i]
+            val p2 = points[i+1]
+            val r = 6371000.0
+            val dLat = Math.toRadians(p2.first - p1.first)
+            val dLon = Math.toRadians(p2.second - p1.second)
+            val a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(Math.toRadians(p1.first)) * Math.cos(Math.toRadians(p2.first)) *
+                    Math.sin(dLon/2) * Math.sin(dLon/2)
+            val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+            total += r * c
+        }
+        return total
+    }
+
+    private suspend fun getBikeRoute(points: List<Pair<Double, Double>>, profile: String, altIdx: Int = 0): BRouterResult = withContext(Dispatchers.IO) {
         try {
             val coordsString = points.joinToString("|") { "${it.second},${it.first}" }
             val urlString = "https://brouter.de/brouter?lonlats=$coordsString&profile=$profile&alternativeidx=$altIdx&format=geojson"
@@ -183,26 +209,39 @@ class MapViewModel : ViewModel() {
             connection.readTimeout = 20000
             
             val responseCode = connection.responseCode
-            if (responseCode != 200) return@withContext points
+            if (responseCode != 200) return@withContext BRouterResult(points)
 
             val responseText = connection.inputStream.bufferedReader().use { it.readText() }
             val json = jsonParser.parseToJsonElement(responseText).jsonObject
             
             val features = json["features"]?.jsonArray
             if (features != null && features.isNotEmpty()) {
+                val properties = features[0].jsonObject["properties"]?.jsonObject
+                
+                // Extrahiere Distanz und Höhenmeter robust (BRouter liefert oft Strings in GeoJSON)
+                val distStr = properties?.get("track-length")?.jsonPrimitive?.content
+                val dist = distStr?.toDoubleOrNull() ?: 0.0
+                
+                val elevStr = properties?.get("filtered ascend")?.jsonPrimitive?.content 
+                          ?: properties?.get("plain-ascend")?.jsonPrimitive?.content
+                          ?: properties?.get("filtered-ascent")?.jsonPrimitive?.content
+                          ?: properties?.get("plain-ascent")?.jsonPrimitive?.content
+                val elev = elevStr?.toDoubleOrNull()?.toInt() ?: 0
+
                 val geometry = features[0].jsonObject["geometry"]?.jsonObject
                 val coordinates = geometry?.get("coordinates")?.jsonArray
                 
-                if (coordinates != null && coordinates.size > 2) {
-                    return@withContext coordinates.map {
+                if (coordinates != null && coordinates.size >= 2) {
+                    val resultPoints = coordinates.map {
                         val point = it.jsonArray
                         point[1].jsonPrimitive.double to point[0].jsonPrimitive.double
                     }
+                    return@withContext BRouterResult(resultPoints, dist, elev)
                 }
             }
         } catch (e: Exception) {
         }
-        points
+        BRouterResult(points)
     }
 
     suspend fun shareGpx(option: RouteOption, context: android.content.Context) {
@@ -627,7 +666,11 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
             val altPart = if (opt.isOriginal) "" else "&alternativeidx=${opt.alternativeIdx}"
             val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
             
-            """{"title":"${opt.title}","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
+            val km = String.format(Locale.US, "%.1f km", opt.distanceMeters / 1000.0)
+            val hm = ", ${opt.elevationGain} hm"
+            val fullTitle = if (opt.distanceMeters > 0) "${opt.title} ($km$hm)" else opt.title
+
+            """{"title":"$fullTitle","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
         }
 
         """
@@ -641,16 +684,25 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                 body { margin: 0; padding: 0; }
                 .leaflet-interactive { cursor: pointer; }
                 .route-label {
-                    background: rgba(255, 255, 255, 0.9);
-                    border: 2px solid #333;
-                    border-radius: 4px;
-                    padding: 2px 6px;
-                    font-size: 11px;
-                    font-weight: bold;
-                    white-space: nowrap;
-                    color: #000;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                    background: transparent !important;
+                    border: none !important;
+                    box-shadow: none !important;
+                    padding: 0 !important;
                     pointer-events: auto !important;
+                }
+                .route-label:before {
+                    display: none !important;
+                }
+                .label-inner {
+                    border: 1px solid #333;
+                    border-radius: 3px;
+                    padding: 1px 2px;
+                    font-size: 10px;
+                    line-height: 1.1;
+                    font-weight: bold;
+                    text-align: center;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+                    white-space: nowrap;
                 }
             </style>
         </head>
@@ -665,7 +717,7 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                 var routes = $jsonString;
                 var group = new L.featureGroup();
                 
-                routes.forEach(function(route) {
+                routes.forEach(function(route, index) {
                     var polyline = L.polyline(route.points, {
                         color: route.color,
                         weight: route.color === '#0000FF' ? 6 : 4,
@@ -682,26 +734,33 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                     polyline.on('click', openFn);
                     
                     // Simplify Label Text
-                    var labelText = "Route";
-                    if (route.isOriginal) labelText = "Google";
-                    else if (route.title.includes("Route 1")) labelText = " R1 ";
-                    else if (route.title.includes("Route 2")) labelText = " R2";
-                    else if (route.title.includes("Route 3")) labelText = " R3 ";
-                    else if (route.title.includes("Route 4")) labelText = " R4 ";
+                    var labelText = route.title;
+                    if (route.isOriginal) {
+                        labelText = "G";
+                    } else {
+                        labelText = route.title.replace("Route ", "R");
+                    }
                     
                     // Add permanent label
                     if (route.points.length > 2) {
-                        var midIdx = Math.floor(route.points.length / 2);
-                        var midPoint = route.points[midIdx];
+                        // Stagger labels along the route (30%, 50%, 70%, etc.)
+                        var positions = [0.5, 0.3, 0.7, 0.4, 0.6];
+                        var posFactor = positions[index % positions.length];
+                        var targetIdx = Math.floor(route.points.length * posFactor);
+                        var pos = route.points[targetIdx];
                         
+                        var textColor = (route.color === '#00FFFF' || route.color === '#FF8800') ? 'black' : 'white';
+                        var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + ';">' + labelText + '</div>';
+
                         var tooltip = L.tooltip({
                             permanent: true,
                             direction: 'top',
                             className: 'route-label',
-                            interactive: true
+                            interactive: true,
+                            offset: [0, -5]
                         })
-                        .setLatLng(midPoint)
-                        .setContent(labelText)
+                        .setLatLng(pos)
+                        .setContent(content)
                         .addTo(map);
                         
                         tooltip.on('click', openFn);
@@ -752,27 +811,52 @@ fun RouteOptionCard(
     onPreview: () -> Unit,
     onShare: () -> Unit
 ) {
+    val routeColor = when {
+        option.isOriginal -> Color(0xFF666666)
+        option.title == "Route 1" -> Color(0xFF0000FF)
+        option.title == "Route 2" -> Color(0xFFFF00FF)
+        option.title == "Route 3" -> Color(0xFF00FFFF)
+        else -> Color(0xFFFF8800)
+    }
+
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        //Column(modifier = Modifier.padding(4.dp)) {
-
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Spacer(modifier = Modifier.width(4.dp))
             
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${option.title} ",
-                    style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)
-                )
+            // Color indicator dot
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(routeColor)
+            )
 
-                OutlinedButton(onClick = onPreview, modifier = Modifier.weight(2f)) {
-                    Text("Detail")
-                }
-                Button(onClick = onShare, modifier = Modifier.weight(2f)) {
-                    Text("Öffnen")
+            Column(modifier = Modifier.weight(1.2f)) {
+                Text(
+                    text = option.title,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                if (option.distanceMeters > 0) {
+                    val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                    val hm = ", ${option.elevationGain} hm"
+                    Text(
+                        text = "$km$hm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-       // }
+
+            OutlinedButton(onClick = onPreview, modifier = Modifier.weight(1.2f)) {
+                Text("Detail")
+            }
+            Button(onClick = onShare, modifier = Modifier.weight(1.2f)) {
+                Text("Öffnen")
+            }
+        }
     }
 }
