@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +84,8 @@ class MapViewModel : ViewModel() {
     
     var routeOptions by mutableStateOf<List<RouteOption>>(emptyList())
         private set
+    var visibleRoutes by mutableStateOf<Set<Int>>(emptySet())
+        private set
 
     fun initPrefs(context: android.content.Context) {
         if (prefs == null) {
@@ -96,6 +100,14 @@ class MapViewModel : ViewModel() {
         
         lastSharedText?.let {
             processSharedText(it, context)
+        }
+    }
+
+    fun toggleRouteVisibility(index: Int) {
+        visibleRoutes = if (visibleRoutes.contains(index)) {
+            visibleRoutes - index
+        } else {
+            visibleRoutes + index
         }
     }
 
@@ -158,6 +170,7 @@ class MapViewModel : ViewModel() {
                     }
                     
                     routeOptions = options
+                    visibleRoutes = options.indices.toSet()
                     status = "Route bereit!"
                 } else {
                     status = "Keine Koordinaten gefunden."
@@ -616,7 +629,13 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     scope.launch { viewModel.shareGpx(option, context) }
                     selectedRouteForDialog = null
                 }) {
-                    Text("Öffnen")
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize)
+                    )
+                    //Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+                    Text("Teilen")
                 }
             },
             dismissButton = {
@@ -624,7 +643,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     onPreview(option)
                     selectedRouteForDialog = null
                 }) {
-                    Text("Detail")
+                    Text("BRouter-Web")
                 }
             }
         )
@@ -700,6 +719,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         if (viewModel.routeOptions.isNotEmpty()) {
             MapPreview(
                 options = viewModel.routeOptions,
+                visibleRoutes = viewModel.visibleRoutes,
                 currentProfile = viewModel.bikeProfile,
                 onRouteSelected = { index ->
                     selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
@@ -713,9 +733,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        viewModel.routeOptions.forEach { option ->
+        viewModel.routeOptions.forEachIndexed { index, option ->
             RouteOptionCard(
                 option = option,
+                isVisible = viewModel.visibleRoutes.contains(index),
+                onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
                 onClick = { selectedRouteForDialog = option }
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -743,24 +765,19 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 @Composable
 fun MapPreview(
     options: List<RouteOption>,
+    visibleRoutes: Set<Int>,
     currentProfile: String,
     onRouteSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(options, currentProfile) {
+    val htmlContent = remember(options, visibleRoutes, currentProfile) {
         val jsonString = options.mapIndexed { index, opt ->
-            val coords = opt.points.joinToString(",") { "[${it.first},${it.second}]" }
+            val isVisible = visibleRoutes.contains(index)
+            val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
             var color = if (opt.isOriginal) "#666666" else if (opt.title == "Hauptroute") "#0000FF" else "#FF8800"
             color = if (opt.title == "Alternative 1") "#FF00FF" else color
             color = if (opt.title == "Alternative 2") "#00FFFF" else color
             color = if (opt.title == "Alternative 3") "#FF8800" else color
-            
-            val inputPoints = opt.inputPoints.ifEmpty { opt.points }
-            val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
-            val firstPoint = inputPoints.first()
-            val profile = if (opt.isOriginal) "trekking" else currentProfile
-            val altPart = if (opt.isOriginal) "" else "&alternativeidx=${opt.alternativeIdx}"
-            val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
             
             val km = String.format(Locale.US, "%.1f km", opt.distanceMeters / 1000.0)
             val timeText = if (opt.totalTimeSeconds > 0) {
@@ -769,7 +786,7 @@ fun MapPreview(
                 if (h > 0) "${h}h ${m}min" else "${m}min"
             } else ""
 
-            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
+            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$color","points":[$coords],"isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
         """
@@ -817,6 +834,8 @@ fun MapPreview(
                 var group = new L.featureGroup();
                 
                 routes.forEach(function(route, index) {
+                    if (!route.isVisible || route.points.length === 0) return;
+
                     var polyline = L.polyline(route.points, {
                         color: route.color,
                         weight: route.color === '#0000FF' ? 6 : 4,
@@ -869,7 +888,7 @@ fun MapPreview(
                     group.addLayer(polyline);
                 });
                 
-                if (routes.length > 0) {
+                if (group.getLayers().length > 0) {
                     setTimeout(function() {
                         map.invalidateSize();
                         map.fitBounds(group.getBounds().pad(0.1));
@@ -925,6 +944,8 @@ fun MapPreview(
 @Composable
 fun RouteOptionCard(
     option: RouteOption,
+    isVisible: Boolean,
+    onToggleVisibility: () -> Unit,
     onClick: () -> Unit
 ) {
     val routeColor = when {
@@ -948,16 +969,17 @@ fun RouteOptionCard(
         onClick = onClick
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Color indicator dot
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(routeColor)
+            Checkbox(
+                checked = isVisible,
+                onCheckedChange = { onToggleVisibility() },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = routeColor,
+                    uncheckedColor = MaterialTheme.colorScheme.outline
+                )
             )
 
             Text(
@@ -970,7 +992,8 @@ fun RouteOptionCard(
                 Text(
                     text = if (timeText.isNotEmpty()) "$km • $timeText" else km,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 12.dp)
                 )
             }
         }
