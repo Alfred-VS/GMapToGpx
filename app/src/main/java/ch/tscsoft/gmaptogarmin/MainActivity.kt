@@ -768,10 +768,13 @@ fun MapPreview(
             val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
             
             val km = String.format(Locale.US, "%.1f km", opt.distanceMeters / 1000.0)
-            val anstieg = ", ${opt.elevationGain} m"
-            val fullTitle = if (opt.distanceMeters > 0) "${opt.title} ($km$anstieg)" else opt.title
+            val timeText = if (opt.totalTimeSeconds > 0) {
+                val h = opt.totalTimeSeconds / 3600
+                val m = (opt.totalTimeSeconds % 3600) / 60
+                if (h > 0) "${h}h ${m}min" else "${m}min"
+            } else ""
 
-            """{"index":$index, "title":"$fullTitle","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
+            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
         """
@@ -798,7 +801,7 @@ fun MapPreview(
                     border: 1px solid #333;
                     border-radius: 3px;
                     padding: 1px 2px;
-                    font-size: 10px;
+                    font-size: 12px;
                     line-height: 1.1;
                     font-weight: bold;
                     text-align: center;
@@ -834,12 +837,13 @@ fun MapPreview(
                     
                     polyline.on('click', openFn);
                     
-                    // Simplify Label Text
-                    var labelText = route.title;
+                    // Simplify Label Text: Distanz & Zeit
+                    var labelText = route.km;
+                    if (route.time) {
+                        labelText += " " + route.time ;
+                    }
                     if (route.isOriginal) {
-                        labelText = "G";
-                    } else {
-                        labelText = route.title.replace("Route ", "R");
+                        labelText = "G: " + labelText;
                     }
                     
                     // Add permanent label
