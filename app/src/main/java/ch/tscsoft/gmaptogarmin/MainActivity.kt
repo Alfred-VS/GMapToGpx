@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.*
@@ -87,6 +90,7 @@ class MapViewModel : ViewModel() {
         private set
     var visibleRoutes by mutableStateOf<Set<Int>>(emptySet())
         private set
+    var isMapFullscreen by mutableStateOf(false)
 
     fun initPrefs(context: android.content.Context) {
         if (prefs == null) {
@@ -657,74 +661,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         )
     }
 
-    Column(
-        modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Google Maps to GPX",
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(0.dp)) {
-                //Text("Routing-Profil:", style = MaterialTheme.typography.labelLarge)
-
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { if (!viewModel.isProcessing) expanded = !expanded },
-                    modifier = Modifier.padding(vertical = 0.dp)
-                ) {
-                    OutlinedTextField(
-                        value = currentLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedBorderColor = Color.Transparent,
-                            disabledBorderColor = Color.Transparent,
-                            errorBorderColor = Color.Transparent
-                        ),
-                        modifier = Modifier.menuAnchor().fillMaxWidth()
-                    )
-
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        profiles.forEach { (id, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    viewModel.updateProfile(id, context)
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
+    if (viewModel.isMapFullscreen) {
+        BackHandler {
+            viewModel.isMapFullscreen = false
         }
         
-        if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = viewModel.status,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-
-        if (viewModel.isProcessing) {
-            Spacer(modifier = Modifier.height(8.dp))
-            CircularProgressIndicator(modifier = Modifier.size(32.dp))
-        }
-        
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (viewModel.routeOptions.isNotEmpty()) {
+        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             MapPreview(
                 options = viewModel.routeOptions,
                 visibleRoutes = viewModel.visibleRoutes,
@@ -732,42 +674,141 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 onRouteSelected = { index ->
                     selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
                 },
-                modifier = Modifier
+                modifier = Modifier.fillMaxSize()
+            )
+            
+            SmallFloatingActionButton(
+                onClick = { viewModel.isMapFullscreen = false },
+                modifier = Modifier.padding(16.dp).align(Alignment.TopEnd),
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+            ) {
+                Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+            }
+        }
+    } else {
+        Column(
+            modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Google Maps to GPX",
+                style = MaterialTheme.typography.headlineMedium,
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(0.dp)) {
+                    //Text("Routing-Profil:", style = MaterialTheme.typography.labelLarge)
+
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { if (!viewModel.isProcessing) expanded = !expanded },
+                        modifier = Modifier.padding(vertical = 0.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = currentLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                                focusedBorderColor = Color.Transparent,
+                                unfocusedBorderColor = Color.Transparent,
+                                disabledBorderColor = Color.Transparent,
+                                errorBorderColor = Color.Transparent
+                            ),
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            profiles.forEach { (id, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        viewModel.updateProfile(id, context)
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = viewModel.status,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            if (viewModel.isProcessing) {
+                Spacer(modifier = Modifier.height(8.dp))
+                CircularProgressIndicator(modifier = Modifier.size(32.dp))
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (viewModel.routeOptions.isNotEmpty()) {
+                Box(modifier = Modifier
                     .fillMaxWidth()
                     .height(mapHeight)
                     .clip(MaterialTheme.shapes.medium)
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-
-        viewModel.routeOptions.forEachIndexed { index, option ->
-            RouteOptionCard(
-                option = option,
-                isVisible = viewModel.visibleRoutes.contains(index),
-                onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
-                onClick = { selectedRouteForDialog = option },
-                onShare = {
-                    scope.launch { viewModel.shareGpx(option, context) }
+                ) {
+                    MapPreview(
+                        options = viewModel.routeOptions,
+                        visibleRoutes = viewModel.visibleRoutes,
+                        currentProfile = viewModel.bikeProfile,
+                        onRouteSelected = { index ->
+                            selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    
+                    SmallFloatingActionButton(
+                        onClick = { viewModel.isMapFullscreen = true },
+                        modifier = Modifier.padding(8.dp).align(Alignment.TopEnd),
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    ) {
+                        Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                    }
                 }
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-
-        if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
-            Text(
-                text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 32.dp)
-            )
-
-            if (viewModel.debugUrl != null) {
+                
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Letzte URL: ${viewModel.debugUrl}",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 8.dp)
+            }
+
+            viewModel.routeOptions.forEachIndexed { index, option ->
+                RouteOptionCard(
+                    option = option,
+                    isVisible = viewModel.visibleRoutes.contains(index),
+                    onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
+                    onClick = { selectedRouteForDialog = option },
+                    onShare = {
+                        scope.launch { viewModel.shareGpx(option, context) }
+                    }
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
+                Text(
+                    text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
+
+                if (viewModel.debugUrl != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Letzte URL: ${viewModel.debugUrl}",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
             }
         }
     }
