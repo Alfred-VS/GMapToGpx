@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -54,13 +55,17 @@ data class RouteOption(
     val inputPoints: List<Pair<Double, Double>> = emptyList(),
     val alternativeIdx: Int = 0,
     val distanceMeters: Double = 0.0,
-    val elevationGain: Int = 0
+    val elevationGain: Int = 0,
+    val elevationLoss: Int = 0,
+    val totalTimeSeconds: Int = 0
 )
 
 data class BRouterResult(
     val points: List<Pair<Double, Double>>,
     val distance: Double = 0.0,
-    val elevation: Int = 0
+    val elevationGain: Int = 0,
+    val elevationLoss: Int = 0,
+    val totalTimeSeconds: Int = 0
 )
 
 class MapViewModel : ViewModel() {
@@ -138,7 +143,7 @@ class MapViewModel : ViewModel() {
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
                         
-                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevation))
+                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
                         
                         // Fetch Alternatives 1, 2, 3
                         for (i in 1..3) {
@@ -148,7 +153,7 @@ class MapViewModel : ViewModel() {
                             val j = i+1
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevation))
+                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
                             }
                         }
                     }
@@ -218,25 +223,69 @@ class MapViewModel : ViewModel() {
             if (features != null && features.isNotEmpty()) {
                 val properties = features[0].jsonObject["properties"]?.jsonObject
                 
-                // Extrahiere Distanz und Höhenmeter robust (BRouter liefert oft Strings in GeoJSON)
+                // Extrahiere Distanz robust
                 val distStr = properties?.get("track-length")?.jsonPrimitive?.content
                 val dist = distStr?.toDoubleOrNull() ?: 0.0
                 
-                val elevStr = properties?.get("filtered ascend")?.jsonPrimitive?.content 
-                          ?: properties?.get("plain-ascend")?.jsonPrimitive?.content
-                          ?: properties?.get("filtered-ascent")?.jsonPrimitive?.content
-                          ?: properties?.get("plain-ascent")?.jsonPrimitive?.content
-                val elev = elevStr?.toDoubleOrNull()?.toInt() ?: 0
+                // Extrahiere Anstieg und Netto-Höhenunterschied
+                val gainStr = properties?.get("filtered ascend")?.jsonPrimitive?.content 
+                             ?: properties?.get("filtered-ascend")?.jsonPrimitive?.content
+                val plainStr = properties?.get("plain-ascend")?.jsonPrimitive?.content
+                
+                val filteredGain = gainStr?.toDoubleOrNull()?.toInt() ?: 0
+                val plainAscent = plainStr?.toDoubleOrNull()?.toInt() ?: 0
+                
+                // Berechnung des Abstiegs: Total Abstieg = Total Anstieg - Netto-Höhenunterschied
+                // BRouter liefert meist keinen "filtered descend" direkt im Header
+                var elevGain = filteredGain
+                var elevLoss = filteredGain - plainAscent
+                
+                // Extrahiere Zeit robust
+                val timeStr = properties?.get("total-time")?.jsonPrimitive?.content 
+                             ?: properties?.get("time")?.jsonPrimitive?.content
+                val totalTimeSeconds = timeStr?.toDoubleOrNull()?.toInt() ?: 0
 
                 val geometry = features[0].jsonObject["geometry"]?.jsonObject
                 val coordinates = geometry?.get("coordinates")?.jsonArray
                 
+                // Fallback: Manuelle Berechnung NUR wenn BRouter keine Daten lieferte (filteredGain == 0)
                 if (coordinates != null && coordinates.size >= 2) {
+                    if (elevGain <= 0) {
+                        var calcGain = 0.0
+                        var calcLoss = 0.0
+                        var lastZ: Double? = null
+                        // Einfacher Hysteresefilter (3m) für die manuelle Berechnung
+                        val threshold = 3.0 
+                        
+                        for (i in 0 until coordinates.size) {
+                            val p = coordinates[i].jsonArray
+                            if (p.size >= 3) {
+                                val z = p[2].jsonPrimitive.doubleOrNull
+                                if (z != null) {
+                                    if (lastZ != null) {
+                                        val diff = z - lastZ
+                                        if (diff > threshold) {
+                                            calcGain += diff
+                                            lastZ = z
+                                        } else if (diff < -threshold) {
+                                            calcLoss += -diff
+                                            lastZ = z
+                                        }
+                                    } else {
+                                        lastZ = z
+                                    }
+                                }
+                            }
+                        }
+                        elevGain = calcGain.toInt()
+                        elevLoss = calcLoss.toInt()
+                    }
+                    
                     val resultPoints = coordinates.map {
                         val point = it.jsonArray
                         point[1].jsonPrimitive.double to point[0].jsonPrimitive.double
                     }
-                    return@withContext BRouterResult(resultPoints, dist, elev)
+                    return@withContext BRouterResult(resultPoints, dist, elevGain, elevLoss, totalTimeSeconds)
                 }
             }
         } catch (e: Exception) {
@@ -510,6 +559,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
+    var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
+    
+    val configuration = LocalConfiguration.current
+    val mapHeight = (configuration.screenHeightDp.dp * 0.6f).coerceIn(300.dp, 600.dp)
     
     val profiles = listOf(
         "fastbike" to "Rennrad",
@@ -526,6 +579,57 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     )
     
     val currentLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
+
+    fun onPreview(option: RouteOption) {
+        val inputPoints = option.inputPoints.ifEmpty { option.points }
+        val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
+        val firstPoint = inputPoints.first()
+        
+        // Use the original input points and the alternative index in the URL
+        val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
+        val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
+        
+        val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
+        context.startActivity(intent)
+    }
+
+    if (selectedRouteForDialog != null) {
+        val option = selectedRouteForDialog!!
+        AlertDialog(
+            onDismissRequest = { selectedRouteForDialog = null },
+            title = { Text(option.title) },
+            text = {
+                val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                val anstieg = "${option.elevationGain} hm"
+                val abstieg = "${option.elevationLoss} hm"
+                
+                val timeText = if (option.totalTimeSeconds > 0) {
+                    val h = option.totalTimeSeconds / 3600
+                    val m = (option.totalTimeSeconds % 3600) / 60
+                    if (h > 0) "${h} h ${m} min" else "${m} min"
+                } else ""
+                
+                Text("Distanz: $km\nAnstieg: $anstieg\nAbstieg: $abstieg\nZeit: $timeText")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    scope.launch { viewModel.shareGpx(option, context) }
+                    selectedRouteForDialog = null
+                }) {
+                    Text("Öffnen")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    onPreview(option)
+                    selectedRouteForDialog = null
+                }) {
+                    Text("Detail")
+                }
+            }
+        )
+    }
 
     Column(
         modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
@@ -579,12 +683,13 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             }
         }
         
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        Text(
-            text = viewModel.status,
-            style = MaterialTheme.typography.bodyLarge
-        )
+        if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = viewModel.status,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
 
         if (viewModel.isProcessing) {
             Spacer(modifier = Modifier.height(16.dp))
@@ -597,9 +702,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             MapPreview(
                 options = viewModel.routeOptions,
                 currentProfile = viewModel.bikeProfile,
+                onRouteSelected = { index ->
+                    selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(300.dp)
+                    .height(mapHeight)
                     .clip(MaterialTheme.shapes.medium)
             )
             
@@ -610,19 +718,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             RouteOptionCard(
                 option = option,
                 currentProfile = viewModel.bikeProfile,
-                onPreview = {
-                    val inputPoints = option.inputPoints.ifEmpty { option.points }
-                    val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
-                    val firstPoint = inputPoints.first()
-                    
-                    // Use the original input points and the alternative index in the URL
-                    val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
-                    val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
-                    
-                    val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
-                    context.startActivity(intent)
-                },
+                onPreview = { onPreview(option) },
                 onShare = {
                     scope.launch { viewModel.shareGpx(option, context) }
                 }
@@ -650,9 +746,14 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Modifier = Modifier) {
+fun MapPreview(
+    options: List<RouteOption>,
+    currentProfile: String,
+    onRouteSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val htmlContent = remember(options, currentProfile) {
-        val jsonString = options.joinToString(",", prefix = "[", postfix = "]") { opt ->
+        val jsonString = options.mapIndexed { index, opt ->
             val coords = opt.points.joinToString(",") { "[${it.first},${it.second}]" }
             var color = if (opt.isOriginal) "#666666" else if (opt.title.equals("Route 1")) "#0000FF" else "#FF8800"
             color = if (opt.title.equals("Route 2")) "#FF00FF" else color
@@ -667,11 +768,11 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
             val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
             
             val km = String.format(Locale.US, "%.1f km", opt.distanceMeters / 1000.0)
-            val hm = ", ${opt.elevationGain} hm"
-            val fullTitle = if (opt.distanceMeters > 0) "${opt.title} ($km$hm)" else opt.title
+            val anstieg = ", ${opt.elevationGain} m"
+            val fullTitle = if (opt.distanceMeters > 0) "${opt.title} ($km$anstieg)" else opt.title
 
-            """{"title":"$fullTitle","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
-        }
+            """{"index":$index, "title":"$fullTitle","color":"$color","points":[$coords],"previewUrl":"$previewUrl","isOriginal":${opt.isOriginal}}"""
+        }.joinToString(",", prefix = "[", postfix = "]")
 
         """
         <!DOCTYPE html>
@@ -727,7 +828,7 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                     
                     var openFn = function() {
                         if (window.Android) {
-                            window.Android.openRoute(route.previewUrl);
+                            window.Android.selectRoute(route.index);
                         }
                     };
                     
@@ -770,7 +871,10 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                 });
                 
                 if (routes.length > 0) {
-                    map.fitBounds(group.getBounds().pad(0.1));
+                    setTimeout(function() {
+                        map.invalidateSize();
+                        map.fitBounds(group.getBounds().pad(0.1));
+                    }, 200);
                 }
             </script>
         </body>
@@ -789,9 +893,8 @@ fun MapPreview(options: List<RouteOption>, currentProfile: String, modifier: Mod
                 settings.javaScriptEnabled = true
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
-                    fun openRoute(url: String) {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                        context.startActivity(intent)
+                    fun selectRoute(index: Int) {
+                        onRouteSelected(index)
                     }
                 }, "Android")
                 webViewClient = WebViewClient()
@@ -842,9 +945,9 @@ fun RouteOptionCard(
                 )
                 if (option.distanceMeters > 0) {
                     val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                    val hm = ", ${option.elevationGain} hm"
+                    val anstieg = "${option.elevationGain} hm"
                     Text(
-                        text = "$km$hm",
+                        text = "$km, $anstieg",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
