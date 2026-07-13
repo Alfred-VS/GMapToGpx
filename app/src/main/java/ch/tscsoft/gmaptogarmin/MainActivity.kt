@@ -561,7 +561,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
     
     val configuration = LocalConfiguration.current
-    val mapHeight = (configuration.screenHeightDp.dp * 0.6f).coerceIn(300.dp, 600.dp)
+    val mapHeight = (configuration.screenHeightDp.dp * 0.45f).coerceIn(250.dp, 500.dp)
     
     val profiles = listOf(
         "fastbike" to "Rennrad",
@@ -683,19 +683,19 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         }
         
         if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = viewModel.status,
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyMedium
             )
         }
 
         if (viewModel.isProcessing) {
-            Spacer(modifier = Modifier.height(16.dp))
-            CircularProgressIndicator()
+            Spacer(modifier = Modifier.height(8.dp))
+            CircularProgressIndicator(modifier = Modifier.size(32.dp))
         }
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         if (viewModel.routeOptions.isNotEmpty()) {
             MapPreview(
@@ -710,7 +710,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     .clip(MaterialTheme.shapes.medium)
             )
             
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
         viewModel.routeOptions.forEach { option ->
@@ -718,7 +718,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 option = option,
                 onClick = { selectedRouteForDialog = option }
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
         }
 
         if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
@@ -729,7 +729,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             )
 
             if (viewModel.debugUrl != null) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "Letzte URL: ${viewModel.debugUrl}",
                     style = MaterialTheme.typography.labelSmall,
@@ -935,37 +935,43 @@ fun RouteOptionCard(
         else -> Color(0xFFFF8800)
     }
 
+    val timeText = if (option.totalTimeSeconds > 0) {
+        val h = option.totalTimeSeconds / 3600
+        val m = (option.totalTimeSeconds % 3600) / 60
+        if (h > 0) "${h}h ${m}m" else "${m}m"
+    } else ""
+
+    val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Color indicator dot
             Box(
                 modifier = Modifier
-                    .size(12.dp)
+                    .size(10.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
                     .background(routeColor)
             )
 
-            Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = option.title,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            
+            if (option.distanceMeters > 0) {
                 Text(
-                    text = option.title,
-                    style = MaterialTheme.typography.titleMedium
+                    text = if (timeText.isNotEmpty()) "$km • $timeText" else km,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (option.distanceMeters > 0) {
-                    val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                    val anstieg = "${option.elevationGain} hm"
-                    Text(
-                        text = "$km, $anstieg",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         }
     }
