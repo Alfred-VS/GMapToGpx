@@ -891,6 +891,7 @@ fun MapPreview(
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
                     fun selectRoute(index: Int) {
@@ -898,11 +899,26 @@ fun MapPreview(
                     }
                 }, "Android")
                 webViewClient = WebViewClient()
-                loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
+
+                // Verhindert, dass das äußere Scroll-Element (Column) die Touch-Events abfängt,
+                // wenn der Benutzer mit der Karte interagiert.
+                setOnTouchListener { v, event ->
+                    when (event.action) {
+                        android.view.MotionEvent.ACTION_DOWN -> {
+                            v.parent.requestDisallowInterceptTouchEvent(true)
+                        }
+                    }
+                    false
+                }
             }
         },
         update = { webView ->
-            webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
+            // Nur neu laden, wenn sich der Inhalt wirklich geändert hat.
+            // Dies verhindert das träge Verhalten bei Recompositions.
+            if (webView.tag != htmlContent) {
+                webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
+                webView.tag = htmlContent
+            }
         }
     )
 }
