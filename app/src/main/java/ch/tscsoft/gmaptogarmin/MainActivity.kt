@@ -610,6 +610,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         val option = selectedRouteForDialog!!
         AlertDialog(
             onDismissRequest = { selectedRouteForDialog = null },
+            modifier = Modifier.fillMaxWidth(0.95f),
             title = { Text(option.title) },
             text = {
                 val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
@@ -635,7 +636,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         modifier = Modifier.size(ButtonDefaults.IconSize)
                     )
                     //Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                    Text("Teilen")
+                    Text(" Teilen")
                 }
             },
             dismissButton = {
@@ -643,7 +644,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     onPreview(option)
                     selectedRouteForDialog = null
                 }) {
-                    Text("BRouter-Web")
+                    Text("BRouter")
                 }
             }
         )
@@ -969,19 +970,10 @@ fun RouteOptionCard(
         onClick = onClick
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Checkbox(
-                checked = isVisible,
-                onCheckedChange = { onToggleVisibility() },
-                colors = CheckboxDefaults.colors(
-                    checkedColor = routeColor,
-                    uncheckedColor = MaterialTheme.colorScheme.outline
-                )
-            )
-
             Text(
                 text = option.title,
                 style = MaterialTheme.typography.bodyMedium,
@@ -992,10 +984,18 @@ fun RouteOptionCard(
                 Text(
                     text = if (timeText.isNotEmpty()) "$km • $timeText" else km,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 12.dp)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            Checkbox(
+                checked = isVisible,
+                onCheckedChange = { onToggleVisibility() },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = routeColor,
+                    uncheckedColor = MaterialTheme.colorScheme.outline
+                )
+            )
         }
     }
 }
