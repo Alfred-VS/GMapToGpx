@@ -143,17 +143,16 @@ class MapViewModel : ViewModel() {
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
                         
-                        options.add(RouteOption("Route 1", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
+                        options.add(RouteOption("Hauptroute", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
                         
                         // Fetch Alternatives 1, 2, 3
                         for (i in 1..3) {
                             status = "Berechne $profileName Alternative $i..."
                             val altResult = getBikeRoute(points, bikeProfile, i)
                             val altRoute = altResult.points
-                            val j = i+1
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Route $j", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                                options.add(RouteOption("Alternative $i", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
                             }
                         }
                     }
@@ -717,11 +716,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         viewModel.routeOptions.forEach { option ->
             RouteOptionCard(
                 option = option,
-                currentProfile = viewModel.bikeProfile,
-                onPreview = { onPreview(option) },
-                onShare = {
-                    scope.launch { viewModel.shareGpx(option, context) }
-                }
+                onClick = { selectedRouteForDialog = option }
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
@@ -755,10 +750,10 @@ fun MapPreview(
     val htmlContent = remember(options, currentProfile) {
         val jsonString = options.mapIndexed { index, opt ->
             val coords = opt.points.joinToString(",") { "[${it.first},${it.second}]" }
-            var color = if (opt.isOriginal) "#666666" else if (opt.title.equals("Route 1")) "#0000FF" else "#FF8800"
-            color = if (opt.title.equals("Route 2")) "#FF00FF" else color
-            color = if (opt.title.equals("Route 3")) "#00FFFF" else color
-            color = if (opt.title.equals("Route 4")) "#FF8800" else color
+            var color = if (opt.isOriginal) "#666666" else if (opt.title == "Hauptroute") "#0000FF" else "#FF8800"
+            color = if (opt.title == "Alternative 1") "#FF00FF" else color
+            color = if (opt.title == "Alternative 2") "#00FFFF" else color
+            color = if (opt.title == "Alternative 3") "#FF8800" else color
             
             val inputPoints = opt.inputPoints.ifEmpty { opt.points }
             val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
@@ -930,26 +925,25 @@ fun MapPreview(
 @Composable
 fun RouteOptionCard(
     option: RouteOption,
-    currentProfile: String,
-    onPreview: () -> Unit,
-    onShare: () -> Unit
+    onClick: () -> Unit
 ) {
     val routeColor = when {
         option.isOriginal -> Color(0xFF666666)
-        option.title == "Route 1" -> Color(0xFF0000FF)
-        option.title == "Route 2" -> Color(0xFFFF00FF)
-        option.title == "Route 3" -> Color(0xFF00FFFF)
+        option.title == "Hauptroute" -> Color(0xFF0000FF)
+        option.title == "Alternative 1" -> Color(0xFFFF00FF)
+        option.title == "Alternative 2" -> Color(0xFF00FFFF)
         else -> Color(0xFFFF8800)
     }
 
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick
+    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Spacer(modifier = Modifier.width(4.dp))
-            
             // Color indicator dot
             Box(
                 modifier = Modifier
@@ -958,7 +952,7 @@ fun RouteOptionCard(
                     .background(routeColor)
             )
 
-            Column(modifier = Modifier.weight(1.2f)) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = option.title,
                     style = MaterialTheme.typography.titleMedium
@@ -972,13 +966,6 @@ fun RouteOptionCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            }
-
-            OutlinedButton(onClick = onPreview, modifier = Modifier.weight(1.2f)) {
-                Text("Detail")
-            }
-            Button(onClick = onShare, modifier = Modifier.weight(1.2f)) {
-                Text("Öffnen")
             }
         }
     }
