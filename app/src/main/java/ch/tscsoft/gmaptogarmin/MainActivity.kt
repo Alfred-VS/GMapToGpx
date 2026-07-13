@@ -146,12 +146,22 @@ class MapViewModel : ViewModel() {
 
                 if (points.isNotEmpty()) {
                     val options = mutableListOf<RouteOption>()
+                    val isBRouter = resolvedUrl.contains("brouter.de/brouter-web")
                     
                     if (bikeProfile == "direct" || points.size < 2) {
                         // Nur die Original-Punkte anzeigen
                         val googleGpx = createGpx(points)
                         val dist = calculateDistance(points)
-                        options.add(RouteOption("Google Punkte", points, googleGpx, true, points, distanceMeters = dist))
+                        options.add(RouteOption("Importierte Punkte", points, googleGpx, true, points, distanceMeters = dist))
+                    } else if (isBRouter) {
+                        // BRouter Link: Nur diese eine Route laden, keine Alternativen
+                        val urlProfile = "profile=([^&]+)".toRegex().find(resolvedUrl)?.groupValues?.get(1)
+                        val effectiveProfile = urlProfile ?: bikeProfile
+                        val profileName = getProfileLabel(effectiveProfile)
+                        
+                        status = "Lade BRouter Route ($profileName)..."
+                        val result = getBikeRoute(points, effectiveProfile, 0)
+                        options.add(RouteOption("BRouter Import", result.points, createGpx(result.points), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
@@ -392,6 +402,24 @@ class MapViewModel : ViewModel() {
         val decodedUrl = try { java.net.URLDecoder.decode(url, "UTF-8") } catch (e: Exception) { url }
         
         fun isPlausible(lat: Double, lon: Double) = lat in -90.0..90.0 && lon in -180.0..180.0 && (lat != 0.0 || lon != 0.0)
+
+        // --- NEW: BRouter-Web lonlats Support ---
+        if (decodedUrl.contains("lonlats=")) {
+            val lonlatsPart = decodedUrl.substringAfter("lonlats=").substringBefore("&")
+            // Format is: lon,lat;lon,lat;...
+            val points = mutableListOf<Pair<Double, Double>>()
+            lonlatsPart.split(";").forEach { pair ->
+                val parts = pair.split(",")
+                if (parts.size >= 2) {
+                    val lon = parts[0].toDoubleOrNull()
+                    val lat = parts[1].toDoubleOrNull()
+                    if (lat != null && lon != null && isPlausible(lat, lon)) {
+                        points.add(lat to lon)
+                    }
+                }
+            }
+            if (points.isNotEmpty()) return points
+        }
 
         // 1. Identify Camera View (usually follows @)
         val cameraPoint = "@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)".toRegex().find(decodedUrl)?.let {
@@ -655,7 +683,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         modifier = Modifier.size(ButtonDefaults.IconSize)
                     )
                     Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                    Text("Web")
+                    Text(" Edit")
                 }
             }
         )
