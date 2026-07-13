@@ -739,7 +739,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 option = option,
                 isVisible = viewModel.visibleRoutes.contains(index),
                 onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
-                onClick = { selectedRouteForDialog = option }
+                onClick = { selectedRouteForDialog = option },
+                onShare = {
+                    scope.launch { viewModel.shareGpx(option, context) }
+                }
             )
             Spacer(modifier = Modifier.height(4.dp))
         }
@@ -947,7 +950,8 @@ fun RouteOptionCard(
     option: RouteOption,
     isVisible: Boolean,
     onToggleVisibility: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onShare: () -> Unit
 ) {
     val routeColor = when {
         option.isOriginal -> Color(0xFF666666)
@@ -980,6 +984,15 @@ fun RouteOptionCard(
                 modifier = Modifier.weight(1f)
             )
             
+            IconButton(onClick = onShare) {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = "Teilen",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
             if (option.distanceMeters > 0) {
                 Text(
                     text = if (timeText.isNotEmpty()) "$km • $timeText" else km,
