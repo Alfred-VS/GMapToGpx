@@ -11,15 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,8 +29,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.viewinterop.AndroidView
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
@@ -77,6 +71,7 @@ data class BRouterResult(
 class MapViewModel : ViewModel() {
     private var prefs: android.content.SharedPreferences? = null
     private var lastSharedText: String? = null
+    private var lastPoints: List<Pair<Double, Double>> = emptyList()
 
     var status by mutableStateOf("Warte auf Google Maps Link...")
         private set
@@ -85,6 +80,14 @@ class MapViewModel : ViewModel() {
     var debugUrl by mutableStateOf<String?>(null)
         private set
     var bikeProfile by mutableStateOf("fastbike")
+    var autoAltCount by mutableStateOf(0)
+    
+    // Colors (Store as #AARRGGBB)
+    var colorMain by mutableStateOf("#FF0000FF")
+    var colorAlt1 by mutableStateOf("#FFFF00FF")
+    var colorAlt2 by mutableStateOf("#FF00FFFF")
+    var colorAlt3 by mutableStateOf("#FFFF8800")
+    var colorOriginal by mutableStateOf("#99666666")
     
     var routeOptions by mutableStateOf<List<RouteOption>>(emptyList())
         private set
@@ -96,6 +99,19 @@ class MapViewModel : ViewModel() {
         if (prefs == null) {
             prefs = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
             bikeProfile = prefs?.getString("bike_profile", "fastbike") ?: "fastbike"
+            autoAltCount = prefs?.getInt("auto_alt_count", 0) ?: 0
+            
+            colorMain = prefs?.getString("color_main", "#FF0000FF") ?: "#FF0000FF"
+            colorAlt1 = prefs?.getString("color_alt1", "#FFFF00FF") ?: "#FFFF00FF"
+            colorAlt2 = prefs?.getString("color_alt2", "#FF00FFFF") ?: "#FF00FFFF"
+            colorAlt3 = prefs?.getString("color_alt3", "#FFFF8800") ?: "#FFFF8800"
+            colorOriginal = prefs?.getString("color_original", "#99666666") ?: "#99666666"
+        }
+    }
+
+    fun refresh(context: android.content.Context) {
+        lastSharedText?.let {
+            processSharedText(it, context)
         }
     }
 
@@ -105,6 +121,42 @@ class MapViewModel : ViewModel() {
         
         lastSharedText?.let {
             processSharedText(it, context)
+        }
+    }
+
+    fun updateAutoAltCount(count: Int, context: android.content.Context) {
+        autoAltCount = count
+        prefs?.edit()?.putInt("auto_alt_count", count)?.apply()
+        
+        lastSharedText?.let {
+            processSharedText(it, context)
+        }
+    }
+
+    fun updateColor(type: String, hex: String) {
+        when(type) {
+            "main" -> { colorMain = hex; prefs?.edit()?.putString("color_main", hex)?.apply() }
+            "alt1" -> { colorAlt1 = hex; prefs?.edit()?.putString("color_alt1", hex)?.apply() }
+            "alt2" -> { colorAlt2 = hex; prefs?.edit()?.putString("color_alt2", hex)?.apply() }
+            "alt3" -> { colorAlt3 = hex; prefs?.edit()?.putString("color_alt3", hex)?.apply() }
+            "original" -> { colorOriginal = hex; prefs?.edit()?.putString("color_original", hex)?.apply() }
+        }
+    }
+
+    fun resetColors() {
+        colorMain = "#FF0000FF"
+        colorAlt1 = "#FFFF00FF"
+        colorAlt2 = "#FF00FFFF"
+        colorAlt3 = "#FFFF8800"
+        colorOriginal = "#99666666"
+        
+        prefs?.edit()?.let {
+            it.putString("color_main", colorMain)
+            it.putString("color_alt1", colorAlt1)
+            it.putString("color_alt2", colorAlt2)
+            it.putString("color_alt3", colorAlt3)
+            it.putString("color_original", colorOriginal)
+            it.apply()
         }
     }
 
@@ -145,6 +197,7 @@ class MapViewModel : ViewModel() {
                 }
 
                 if (points.isNotEmpty()) {
+                    lastPoints = points
                     val options = mutableListOf<RouteOption>()
                     val isBRouter = resolvedUrl.contains("brouter.de/brouter-web")
                     
@@ -172,8 +225,8 @@ class MapViewModel : ViewModel() {
                         
                         options.add(RouteOption("Hauptroute", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
                         
-                        // Fetch Alternatives 1, 2, 3
-                        for (i in 1..3) {
+                        // Fetch Alternatives according to setting
+                        for (i in 1..autoAltCount) {
                             status = "Berechne $profileName Alternative $i..."
                             val altResult = getBikeRoute(points, bikeProfile, i)
                             val altRoute = altResult.points
@@ -318,6 +371,39 @@ class MapViewModel : ViewModel() {
         } catch (e: Exception) {
         }
         BRouterResult(points)
+    }
+
+    fun fetchAlternatives() {
+        if (lastPoints.isEmpty() || isProcessing) return
+        
+        isProcessing = true
+        viewModelScope.launch {
+            try {
+                val currentOptions = routeOptions.toMutableList()
+                val profileName = getProfileLabel(bikeProfile)
+                val mainRoute = currentOptions.find { it.title == "Hauptroute" }?.points
+                
+                for (i in 1..3) {
+                    // Skip if already loaded
+                    if (currentOptions.any { it.alternativeIdx == i && !it.isOriginal }) continue
+                    
+                    status = "Berechne $profileName Alternative $i..."
+                    val altResult = getBikeRoute(lastPoints, bikeProfile, i)
+                    val altRoute = altResult.points
+                    
+                    if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
+                        currentOptions.add(RouteOption("Alternative $i", altRoute, createGpx(altRoute), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                    }
+                }
+                routeOptions = currentOptions
+                visibleRoutes = currentOptions.indices.toSet()
+                status = "Alternativen geladen!"
+            } catch (e: Exception) {
+                status = "Fehler: ${e.localizedMessage ?: e.message}"
+            } finally {
+                isProcessing = false
+            }
+        }
     }
 
     suspend fun shareGpx(option: RouteOption, context: android.content.Context) {
@@ -533,32 +619,6 @@ class MapViewModel : ViewModel() {
         sb.append("</gpx>")
         return sb.toString()
     }
-
-    private suspend fun saveGpxToDownloads(content: String, contentResolver: android.content.ContentResolver): Uri? = withContext(Dispatchers.IO) {
-        val fileName = "Location_${System.currentTimeMillis()}.gpx"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-            put(MediaStore.MediaColumns.MIME_TYPE, "application/gpx+xml")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            }
-        }
-
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        } else {
-            MediaStore.Files.getContentUri("external")
-        }
-
-        val uri = contentResolver.insert(collection, contentValues)
-        uri?.let {
-            contentResolver.openOutputStream(it)?.use { outputStream ->
-                // Ensure UTF-8 encoding explicitly
-                outputStream.write(content.toByteArray(Charsets.UTF_8))
-            }
-        }
-        uri
-    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -585,7 +645,12 @@ class MainActivity : ComponentActivity() {
             }
 
             GMapToGpxTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    topBar = {
+                        MainTopAppBar(viewModel)
+                    }
+                ) { innerPadding ->
                     MainScreen(viewModel, modifier = Modifier.padding(innerPadding))
                 }
             }
@@ -594,8 +659,209 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent) // Important to update the intent for LaunchedEffect
+        setIntent(intent)
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainTopAppBar(viewModel: MapViewModel) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showInfoDialog by remember { mutableStateOf(false) }
+    var showColorDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val altOptions = listOf(0 to "Nur Hauptroute", 1 to "+1 Alternative", 2 to "+2 Alternativen", 3 to "+3 Alternativen")
+
+    CenterAlignedTopAppBar(
+        title = {
+            Text(
+                "GMap to GPX",
+                style = MaterialTheme.typography.headlineMedium
+            )
+        },
+        actions = {
+            IconButton(onClick = { viewModel.refresh(context) }) {
+                Icon(Icons.Default.Refresh, contentDescription = "Aktualisieren")
+            }
+        },
+        navigationIcon = {
+            IconButton(onClick = { showMenu = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Einstellungen")
+            }
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                Text("Auto-Alternativen", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                altOptions.forEach { (count, label) ->
+                    DropdownMenuItem(
+                        text = { 
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = viewModel.autoAltCount == count, onClick = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(label) 
+                            }
+                        },
+                        onClick = {
+                            viewModel.updateAutoAltCount(count, context)
+                            showMenu = false
+                        }
+                    )
+                }
+
+                HorizontalDivider()
+
+                DropdownMenuItem(
+                    text = { Text("Farben") },
+                    leadingIcon = { Icon(Icons.Default.Palette, null) },
+                    onClick = {
+                        showColorDialog = true
+                        showMenu = false
+                    }
+                )
+
+                DropdownMenuItem(
+                    text = { Text("Info") },
+                    leadingIcon = { Icon(Icons.Default.Info, null) },
+                    onClick = {
+                        showInfoDialog = true
+                        showMenu = false
+                    }
+                )
+            }
+        }
+    )
+
+    if (showColorDialog) {
+        ColorConfigDialog(viewModel) { showColorDialog = false }
+    }
+
+    if (showInfoDialog) {
+        InfoDialog { showInfoDialog = false }
+    }
+}
+
+@Composable
+fun ColorConfigDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Routenfarben") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                //Text("Einstellungen", style = MaterialTheme.typography.labelLarge)
+                ColorRow("Hauptroute", viewModel.colorMain) { viewModel.updateColor("main", it) }
+                ColorRow("Alternative 1", viewModel.colorAlt1) { viewModel.updateColor("alt1", it) }
+                ColorRow("Alternative 2", viewModel.colorAlt2) { viewModel.updateColor("alt2", it) }
+                ColorRow("Alternative 3", viewModel.colorAlt3) { viewModel.updateColor("alt3", it) }
+                ColorRow("Original/Import", viewModel.colorOriginal) { viewModel.updateColor("original", it) }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fertig") } },
+        dismissButton = {
+            IconButton(onClick = { viewModel.resetColors() }) {
+                Icon(Icons.Default.Refresh, contentDescription = "Zurücksetzen")//, tint = MaterialTheme.colorScheme.error)
+            }
+        }
+    )
+}
+
+@Composable
+fun ColorRow(label: String, currentHex: String, onColorSelected: (String) -> Unit) {
+    val colors = listOf(
+        "#0000FF", "#FF00FF", "#00FFFF", "#FF8800", "#FF0000",
+        "#00FF00", "#666666", "#8800FF", "#000000", "#FFD700",
+        "#ADFF2F", "#00FF7F", "#40E0D0", "#1E90FF", "#9370DB",
+        "#FF69B4", "#FF4500", "#8B4513", "#708090", "#BC8F8F",
+        "#F0E68C", "#D2B48C", "#A9A9A9", "#7B68EE", "#00CED1"
+    )
+    var expanded by remember { mutableStateOf(false) }
+
+    // Parse current ARGB hex
+    val currentColor = Color(android.graphics.Color.parseColor(currentHex))
+    val alphaValue = currentColor.alpha
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(currentColor, MaterialTheme.shapes.small)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+                    .clickable { expanded = true }
+            )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                Box(modifier = Modifier.padding(8.dp).width(200.dp)) {
+                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                        columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(5),
+                        modifier = Modifier.height(180.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(colors.size) { index ->
+                            val hex = colors[index]
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(Color(android.graphics.Color.parseColor(hex)), MaterialTheme.shapes.small)
+                                    .clickable {
+                                        // Update color but keep current alpha
+                                        val newColor = android.graphics.Color.parseColor(hex)
+                                        val alpha = (alphaValue * 255).toInt()
+                                        val argb = (alpha shl 24) or (newColor and 0x00FFFFFF)
+                                        onColorSelected(String.format("#%08X", argb))
+                                        expanded = false
+                                    }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Slider(
+                value = alphaValue,
+                onValueChange = { newAlpha ->
+                    val color = android.graphics.Color.parseColor(currentHex)
+                    val alpha = (newAlpha * 255).toInt()
+                    val argb = (alpha shl 24) or (color and 0x00FFFFFF)
+                    onColorSelected(String.format("#%08X", argb))
+                },
+                modifier = Modifier.weight(1f),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Transparent
+                )
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("${(alphaValue * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(32.dp))
+        }
+    }
+}
+
+@Composable
+fun InfoDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Info") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("GMap to GPX konvertiert Google Maps Links in fahrradfreundliche GPX-Dateien.", style = MaterialTheme.typography.bodyMedium)
+                HorizontalDivider()
+                Text("Dienste & Daten:", style = MaterialTheme.typography.labelLarge)
+                Text("• Routing: BRouter API (brouter.de)", style = MaterialTheme.typography.bodySmall)
+                Text("• Karten: OpenStreetMap Mitwirkende (CC BY-SA)", style = MaterialTheme.typography.bodySmall)
+                Text("• Karte-Engine: Leaflet.js", style = MaterialTheme.typography.bodySmall)
+                Text("• Icons: Google Material Icons (Apache 2.0)", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                Text("Entwickelt für die Community.", style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -603,7 +869,6 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var expanded by remember { mutableStateOf(false) }
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
     
     val configuration = LocalConfiguration.current
@@ -619,21 +884,19 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         "hiking-soft" to "Wandern",
         "hiking-mountain" to "Bergwandern",
         "moped" to "Mofa/Moped",
-        "car-test" to "PKW (Test)",
+        "car-test" to "PKW",
         "direct" to "Google URL (nur Punkte)"
     )
     
-    val currentLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
+    var expandedProfile by remember { mutableStateOf(false) }
+    val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
 
     fun onPreview(option: RouteOption) {
         val inputPoints = option.inputPoints.ifEmpty { option.points }
         val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
         val firstPoint = inputPoints.first()
-        
-        // Use the original input points and the alternative index in the URL
         val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
         val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
-        
         val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
         context.startActivity(intent)
@@ -649,13 +912,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
                 val anstieg = "${option.elevationGain} hm"
                 val abstieg = "${option.elevationLoss} hm"
-                
                 val timeText = if (option.totalTimeSeconds > 0) {
                     val h = option.totalTimeSeconds / 3600
                     val m = (option.totalTimeSeconds % 3600) / 60
                     if (h > 0) "${h} h ${m} min" else "${m} min"
                 } else ""
-                
                 Text("Distanz: $km\nAnstieg: $anstieg\nAbstieg: $abstieg\nZeit: $timeText")
             },
             confirmButton = {
@@ -663,12 +924,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     scope.launch { viewModel.shareGpx(option, context) }
                     selectedRouteForDialog = null
                 }) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize)
-                    )
-                    //Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+                    Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                     Text(" Teilen")
                 }
             },
@@ -677,11 +933,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     onPreview(option)
                     selectedRouteForDialog = null
                 }) {
-                    Icon(
-                        imageVector = Icons.Default.Language,
-                        contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize)
-                    )
+                    Icon(imageVector = Icons.Default.Language, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                     Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                     Text(" Edit")
                 }
@@ -690,21 +942,16 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     }
 
     if (viewModel.isMapFullscreen) {
-        BackHandler {
-            viewModel.isMapFullscreen = false
-        }
-        
+        BackHandler { viewModel.isMapFullscreen = false }
         Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             MapPreview(
                 options = viewModel.routeOptions,
                 visibleRoutes = viewModel.visibleRoutes,
                 currentProfile = viewModel.bikeProfile,
-                onRouteSelected = { index ->
-                    selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
-                },
+                colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
+                onRouteSelected = { index -> selectedRouteForDialog = viewModel.routeOptions.getOrNull(index) },
                 modifier = Modifier.fillMaxSize()
             )
-            
             SmallFloatingActionButton(
                 onClick = { viewModel.isMapFullscreen = false },
                 modifier = Modifier.padding(16.dp).align(Alignment.TopEnd),
@@ -715,88 +962,74 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         }
     } else {
         Column(
-            modifier = modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = "Google Maps to GPX",
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(0.dp)) {
-                    //Text("Routing-Profil:", style = MaterialTheme.typography.labelLarge)
-
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { if (!viewModel.isProcessing) expanded = !expanded },
-                        modifier = Modifier.padding(vertical = 0.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = currentLabel,
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedBorderColor = Color.Transparent,
-                                disabledBorderColor = Color.Transparent,
-                                errorBorderColor = Color.Transparent
-                            ),
-                            modifier = Modifier.menuAnchor().fillMaxWidth()
-                        )
-
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            profiles.forEach { (id, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        viewModel.updateProfile(id, context)
-                                        expanded = false
-                                    }
-                                )
+            // Profile Dropdown on Main Page
+            ExposedDropdownMenuBox(
+                expanded = expandedProfile,
+                onExpandedChange = { expandedProfile = !expandedProfile },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = currentProfileLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Routing Profil") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = expandedProfile,
+                    onDismissRequest = { expandedProfile = false }
+                ) {
+                    profiles.forEach { (id, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                viewModel.updateProfile(id, context)
+                                expandedProfile = false
                             }
-                        }
+                        )
                     }
                 }
             }
-            
+
             if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = viewModel.status,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)
             }
 
             if (viewModel.isProcessing) {
                 Spacer(modifier = Modifier.height(8.dp))
                 CircularProgressIndicator(modifier = Modifier.size(32.dp))
             }
+
+            val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+            val isDirect = viewModel.bikeProfile == "direct"
+            val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+
+            if (viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { viewModel.fetchAlternatives() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+                    Text("Alternativen berechnen")
+                }
+            }
             
             Spacer(modifier = Modifier.height(8.dp))
 
             if (viewModel.routeOptions.isNotEmpty()) {
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .height(mapHeight)
-                    .clip(MaterialTheme.shapes.medium)
-                ) {
+                Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
                     MapPreview(
                         options = viewModel.routeOptions,
                         visibleRoutes = viewModel.visibleRoutes,
                         currentProfile = viewModel.bikeProfile,
-                        onRouteSelected = { index ->
-                            selectedRouteForDialog = viewModel.routeOptions.getOrNull(index)
-                        },
+                        colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
+                        onRouteSelected = { index -> selectedRouteForDialog = viewModel.routeOptions.getOrNull(index) },
                         modifier = Modifier.fillMaxSize()
                     )
-                    
                     SmallFloatingActionButton(
                         onClick = { viewModel.isMapFullscreen = true },
                         modifier = Modifier.padding(8.dp).align(Alignment.TopEnd),
@@ -805,7 +1038,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
                     }
                 }
-                
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
@@ -815,9 +1047,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     isVisible = viewModel.visibleRoutes.contains(index),
                     onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
                     onClick = { selectedRouteForDialog = option },
-                    onShare = {
-                        scope.launch { viewModel.shareGpx(option, context) }
-                    }
+                    onShare = { scope.launch { viewModel.shareGpx(option, context) } },
+                    colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
             }
@@ -828,15 +1059,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 32.dp)
                 )
-
-                if (viewModel.debugUrl != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Letzte URL: ${viewModel.debugUrl}",
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                }
             }
         }
     }
@@ -847,26 +1069,36 @@ fun MapPreview(
     options: List<RouteOption>,
     visibleRoutes: Set<Int>,
     currentProfile: String,
+    colors: List<String>,
     onRouteSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(options, visibleRoutes, currentProfile) {
+    val htmlContent = remember(options, visibleRoutes, currentProfile, colors) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
-            var color = if (opt.isOriginal) "#666666" else if (opt.title == "Hauptroute") "#0000FF" else "#FF8800"
-            color = if (opt.title == "Alternative 1") "#FF00FF" else color
-            color = if (opt.title == "Alternative 2") "#00FFFF" else color
-            color = if (opt.title == "Alternative 3") "#FF8800" else color
             
+            val argbHex = when {
+                opt.isOriginal -> colors[4]
+                opt.title == "Hauptroute" -> colors[0]
+                opt.title == "Alternative 1" -> colors[1]
+                opt.title == "Alternative 2" -> colors[2]
+                opt.title == "Alternative 3" -> colors[3]
+                else -> colors[3]
+            }
+            
+            // Convert ARGB to Leaflet color and opacity
+            val colorObj = android.graphics.Color.parseColor(argbHex)
+            val opacity = (android.graphics.Color.alpha(colorObj) / 255.0)
+            val rgbHex = String.format("#%06X", (0xFFFFFF and colorObj))
+
             val km = String.format(Locale.US, "%.1f km", opt.distanceMeters / 1000.0)
             val timeText = if (opt.totalTimeSeconds > 0) {
                 val h = opt.totalTimeSeconds / 3600
                 val m = (opt.totalTimeSeconds % 3600) / 60
                 if (h > 0) "${h}h ${m}min" else "${m}min"
             } else ""
-
-            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$color","points":[$coords],"isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
+            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords],"isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
         """
@@ -879,100 +1111,53 @@ fun MapPreview(
                 #map { height: 100%; width: 100%; position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
                 body { margin: 0; padding: 0; }
                 .leaflet-interactive { cursor: pointer; }
-                .route-label {
-                    background: transparent !important;
-                    border: none !important;
-                    box-shadow: none !important;
-                    padding: 0 !important;
-                    pointer-events: auto !important;
-                }
-                .route-label:before {
-                    display: none !important;
-                }
-                .label-inner {
-                    border: 1px solid #333;
-                    border-radius: 3px;
-                    padding: 1px 2px;
-                    font-size: 12px;
-                    line-height: 1.1;
-                    font-weight: bold;
-                    text-align: center;
-                    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-                    white-space: nowrap;
-                }
+                .route-label { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; pointer-events: auto !important; }
+                .route-label:before { display: none !important; }
+                .label-inner { border: 1px solid #333; border-radius: 3px; padding: 1px 2px; font-size: 12px; line-height: 1.1; font-weight: bold; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.2); white-space: nowrap; }
             </style>
         </head>
         <body>
             <div id="map"></div>
             <script>
                 var map = L.map('map');
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '© OSM'
-                }).addTo(map);
-                
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
                 var routes = $jsonString;
                 var group = new L.featureGroup();
-                
+                function isLight(color) {
+                    var r, g, b, hsp;
+                    color = color.replace('#', '');
+                    if (color.length === 3) color = color.split('').map(function(s){return s+s;}).join('');
+                    r = parseInt(color.substring(0,2),16); g = parseInt(color.substring(2,4),16); b = parseInt(color.substring(4,6),16);
+                    hsp = Math.sqrt(0.299 * (r * r) + 0.587 * (g * g) + 0.114 * (b * b));
+                    return hsp > 127.5;
+                }
                 routes.forEach(function(route, index) {
                     if (!route.isVisible || route.points.length === 0) return;
-
-                    var polyline = L.polyline(route.points, {
-                        color: route.color,
-                        weight: route.color === '#0000FF' ? 6 : 4,
-                        opacity: route.color === '#666666' ? 0.5 : 0.8,
-                        interactive: true
+                    var polyline = L.polyline(route.points, { 
+                        color: route.color, 
+                        opacity: route.opacity,
+                        weight: (route.index === 0 && !route.isOriginal) ? 6 : 4, 
+                        interactive: true 
                     }).addTo(map);
-                    
-                    var openFn = function() {
-                        if (window.Android) {
-                            window.Android.selectRoute(route.index);
-                        }
-                    };
-                    
+                    var openFn = function() { if (window.Android) window.Android.selectRoute(route.index); };
                     polyline.on('click', openFn);
-                    
-                    // Simplify Label Text: Distanz & Zeit
                     var labelText = route.km;
-                    if (route.time) {
-                        labelText += " " + route.time ;
-                    }
-                    if (route.isOriginal) {
-                        labelText = "G: " + labelText;
-                    }
-                    
-                    // Add permanent label
+                    if (route.time) labelText += " " + route.time ;
+                    if (route.isOriginal) labelText = "G: " + labelText;
                     if (route.points.length > 2) {
-                        // Stagger labels along the route (30%, 50%, 70%, etc.)
                         var positions = [0.5, 0.3, 0.7, 0.4, 0.6];
                         var posFactor = positions[index % positions.length];
                         var targetIdx = Math.floor(route.points.length * posFactor);
                         var pos = route.points[targetIdx];
-                        
-                        var textColor = (route.color === '#00FFFF' || route.color === '#FF8800') ? 'black' : 'white';
-                        var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + ';">' + labelText + '</div>';
-
-                        var tooltip = L.tooltip({
-                            permanent: true,
-                            direction: 'top',
-                            className: 'route-label',
-                            interactive: true,
-                            offset: [0, -5]
-                        })
-                        .setLatLng(pos)
-                        .setContent(content)
-                        .addTo(map);
-                        
+                        var textColor = isLight(route.color) ? 'black' : 'white';
+                        var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + '; opacity:' + route.opacity + ';">' + labelText + '</div>';
+                        var tooltip = L.tooltip({ permanent: true, direction: 'top', className: 'route-label', interactive: true, offset: [0, -5] }).setLatLng(pos).setContent(content).addTo(map);
                         tooltip.on('click', openFn);
                     }
-
                     group.addLayer(polyline);
                 });
-                
                 if (group.getLayers().length > 0) {
-                    setTimeout(function() {
-                        map.invalidateSize();
-                        map.fitBounds(group.getBounds().pad(0.1));
-                    }, 200);
+                    setTimeout(function() { map.invalidateSize(); map.fitBounds(group.getBounds().pad(0.1)); }, 200);
                 }
             </script>
         </body>
@@ -984,35 +1169,21 @@ fun MapPreview(
         modifier = modifier,
         factory = { context ->
             WebView(context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
-                    fun selectRoute(index: Int) {
-                        onRouteSelected(index)
-                    }
+                    fun selectRoute(index: Int) { onRouteSelected(index) }
                 }, "Android")
                 webViewClient = WebViewClient()
-
-                // Verhindert, dass das äußere Scroll-Element (Column) die Touch-Events abfängt,
-                // wenn der Benutzer mit der Karte interagiert.
                 setOnTouchListener { v, event ->
-                    when (event.action) {
-                        android.view.MotionEvent.ACTION_DOWN -> {
-                            v.parent.requestDisallowInterceptTouchEvent(true)
-                        }
-                    }
+                    if (event.action == android.view.MotionEvent.ACTION_DOWN) { v.parent.requestDisallowInterceptTouchEvent(true) }
                     false
                 }
             }
         },
         update = { webView ->
-            // Nur neu laden, wenn sich der Inhalt wirklich geändert hat.
-            // Dies verhindert das träge Verhalten bei Recompositions.
             if (webView.tag != htmlContent) {
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 webView.tag = htmlContent
@@ -1027,63 +1198,42 @@ fun RouteOptionCard(
     isVisible: Boolean,
     onToggleVisibility: () -> Unit,
     onClick: () -> Unit,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    colors: List<String>
 ) {
-    val routeColor = when {
-        option.isOriginal -> Color(0xFF666666)
-        option.title == "Hauptroute" -> Color(0xFF0000FF)
-        option.title == "Alternative 1" -> Color(0xFFFF00FF)
-        option.title == "Alternative 2" -> Color(0xFF00FFFF)
-        else -> Color(0xFFFF8800)
+    val routeColorHex = when {
+        option.isOriginal -> colors[4]
+        option.title == "Hauptroute" -> colors[0]
+        option.title == "Alternative 1" -> colors[1]
+        option.title == "Alternative 2" -> colors[2]
+        option.title == "Alternative 3" -> colors[3]
+        else -> colors[3]
     }
-
+    val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
     val timeText = if (option.totalTimeSeconds > 0) {
         val h = option.totalTimeSeconds / 3600
         val m = (option.totalTimeSeconds % 3600) / 60
         if (h > 0) "${h}h ${m}m" else "${m}m"
     } else ""
-
     val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
 
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick
-    ) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = option.title,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f)
-            )
-            
+            Text(text = option.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             IconButton(onClick = onShare) {
-                Icon(
-                    imageVector = Icons.Default.Share,
-                    contentDescription = "Teilen",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                Icon(imageVector = Icons.Default.Share, contentDescription = "Teilen", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
             }
-
             if (option.distanceMeters > 0) {
-                Text(
-                    text = if (timeText.isNotEmpty()) "$km • $timeText" else km,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(text = if (timeText.isNotEmpty()) "$km • $timeText" else km, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
             Checkbox(
                 checked = isVisible,
                 onCheckedChange = { onToggleVisibility() },
-                colors = CheckboxDefaults.colors(
-                    checkedColor = routeColor,
-                    uncheckedColor = MaterialTheme.colorScheme.outline
-                )
+                colors = CheckboxDefaults.colors(checkedColor = routeColor, uncheckedColor = MaterialTheme.colorScheme.outline)
             )
         }
     }
