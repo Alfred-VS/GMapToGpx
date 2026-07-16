@@ -668,6 +668,7 @@ class MainActivity : ComponentActivity() {
 fun MainTopAppBar(viewModel: MapViewModel) {
     var showMenu by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showLegalDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
@@ -729,6 +730,15 @@ fun MainTopAppBar(viewModel: MapViewModel) {
                         showMenu = false
                     }
                 )
+
+                DropdownMenuItem(
+                    text = { Text("Rechtliches") },
+                    leadingIcon = { Icon(Icons.Default.Gavel, null) },
+                    onClick = {
+                        showLegalDialog = true
+                        showMenu = false
+                    }
+                )
             }
         }
     )
@@ -739,6 +749,10 @@ fun MainTopAppBar(viewModel: MapViewModel) {
 
     if (showInfoDialog) {
         InfoDialog { showInfoDialog = false }
+    }
+
+    if (showLegalDialog) {
+        LegalDialog { showLegalDialog = false }
     }
 }
 
@@ -844,24 +858,148 @@ fun ColorRow(label: String, currentHex: String, onColorSelected: (String) -> Uni
 
 @Composable
 fun InfoDialog(onDismiss: () -> Unit) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Über", "Quellen", "Hilfe")
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Info") },
+        title = { Text("Informationen") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("GMap to GPX konvertiert Google Maps Links in fahrradfreundliche GPX-Dateien.", style = MaterialTheme.typography.bodyMedium)
-                HorizontalDivider()
-                Text("Dienste & Daten:", style = MaterialTheme.typography.labelLarge)
-                Text("• Routing: BRouter API (brouter.de)", style = MaterialTheme.typography.bodySmall)
-                Text("• Karten: OpenStreetMap Mitwirkende (CC BY-SA)", style = MaterialTheme.typography.bodySmall)
-                Text("• Karte-Engine: Leaflet.js", style = MaterialTheme.typography.bodySmall)
-                Text("• Icons: Google Material Icons (Apache 2.0)", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.height(8.dp))
-                Text("Entwickelt für die Community.", style = MaterialTheme.typography.labelSmall)
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    when (selectedTab) {
+                        0 -> AboutAppText()
+                        1 -> SourcesText()
+                        2 -> HowToText()
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
     )
+}
+
+@Composable
+fun AboutAppText() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Über GMap to GPX", style = MaterialTheme.typography.labelLarge)
+        Text("Diese App schließt die Lücke zwischen der komfortablen Routenplanung in Google Maps und der Nutzung auf dedizierten GPS-Geräten oder Fahrrad-Navis.", style = MaterialTheme.typography.bodySmall)
+        Text("Sie extrahiert die Wegpunkte aus Google Maps Links und berechnet mithilfe der BRouter-Engine eine optimierte, fahrradtaugliche Route.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Text("Version 1.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun SourcesText() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Dienste & Datenquellen", style = MaterialTheme.typography.labelLarge)
+        
+        Text("Routing Engine", style = MaterialTheme.typography.labelSmall)
+        Text("• BRouter (brouter.de): Hochperformantes, fahrradspezifisches Routing.", style = MaterialTheme.typography.bodySmall)
+        
+        Text("Kartendaten", style = MaterialTheme.typography.labelSmall)
+        Text("• OpenStreetMap: Die freie Weltkarte, erstellt von Freiwilligen weltweit (ODbL Lizenz).", style = MaterialTheme.typography.bodySmall)
+        
+        Text("Bibliotheken", style = MaterialTheme.typography.labelSmall)
+        Text("• Leaflet.js: Anzeige der interaktiven Karte.\n• Google Material Icons: Grafische Benutzeroberfläche.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+fun HowToText() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Kurzanleitung", style = MaterialTheme.typography.labelLarge)
+        Text("1. Öffne Google Maps und wähle einen Ort oder plane eine Route.", style = MaterialTheme.typography.bodySmall)
+        Text("2. Tippe auf 'Teilen' und wähle diese App (GMap to GPX) aus.", style = MaterialTheme.typography.bodySmall)
+        Text("3. Die App berechnet automatisch die Route basierend auf deinem Profil.", style = MaterialTheme.typography.bodySmall)
+        Text("4. Über den 'Teilen'-Button an der Route kannst du die GPX-Datei exportieren.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Text("Tipp: Über das Menü oben links kannst du die Anzahl der Alternativrouten einstellen.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+fun LegalDialog(onDismiss: () -> Unit) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Datenschutz", "Haftung")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rechtliche Informationen") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    when (selectedTab) {
+                        0 -> DatenschutzText()
+                        1 -> HaftungText()
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
+    )
+}
+
+@Composable
+fun ImpressumText() {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Angaben gemäß § 5 TMG:", style = MaterialTheme.typography.labelLarge)
+        Text("[Dein Name/Unternehmen]\n[Deine Straße Hausnummer]\n[PLZ Ort]", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Text("Kontakt:", style = MaterialTheme.typography.labelLarge)
+        Text("Telefon: [Deine Telefonnummer]\nE-Mail: [Deine E-Mail-Adresse]", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Text("Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:", style = MaterialTheme.typography.labelLarge)
+        Text("[Dein Name]\n[Deine Adresse]", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+fun DatenschutzText() {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Datenschutzerklärung", style = MaterialTheme.typography.labelLarge)
+        Text("1. Datenverarbeitung", style = MaterialTheme.typography.labelSmall)
+        Text("Diese App verarbeitet geteilte Google Maps Links, um Routendaten von BRouter.de abzurufen. Dabei werden technisch notwendige Daten (wie die IP-Adresse) an den Routing-Dienst (BRouter-Instanz) übertragen.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(4.dp))
+        Text("2. Lokale Speicherung", style = MaterialTheme.typography.labelSmall)
+        Text("Die App speichert Präferenzen (Fahrradprofil, Farben) lokal auf Ihrem Endgerät. Es findet keine Übermittlung dieser Daten an unsere Server statt.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(4.dp))
+        Text("3. Standortdaten", style = MaterialTheme.typography.labelSmall)
+        Text("Die App extrahiert Standortdaten aus den von Ihnen geteilten Links. Diese werden ausschließlich zur Routenberechnung und Anzeige verwendet.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+fun HaftungText() {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Haftungsausschluss", style = MaterialTheme.typography.labelLarge)
+        Text("Haftung für Inhalte", style = MaterialTheme.typography.labelSmall)
+        Text("Die Inhalte unserer App wurden mit größter Sorgfalt erstellt. Für die Richtigkeit, Vollständigkeit und Aktualität der Inhalte können wir jedoch keine Gewähr übernehmen.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(4.dp))
+        Text("Nutzung auf eigene Gefahr", style = MaterialTheme.typography.labelSmall)
+        Text("Die berechneten Routen sind lediglich Vorschläge. Die Nutzung der Routen erfolgt auf eigene Gefahr. Beachten Sie stets die Gegebenheiten vor Ort und die geltende Straßenverkehrsordnung.", style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
