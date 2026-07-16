@@ -667,12 +667,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainTopAppBar(viewModel: MapViewModel) {
     var showMenu by remember { mutableStateOf(false) }
+    var showAltSubMenu by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var showLegalDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val altOptions = listOf(0 to "Nur Hauptroute", 1 to "+1 Alternative", 2 to "+2 Alternativen", 3 to "+3 Alternativen")
+    val currentAltLabel = altOptions.find { it.first == viewModel.autoAltCount }?.second ?: ""
 
     CenterAlignedTopAppBar(
         title = {
@@ -687,58 +689,74 @@ fun MainTopAppBar(viewModel: MapViewModel) {
             }
         },
         navigationIcon = {
-            IconButton(onClick = { showMenu = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "Einstellungen")
-            }
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false }
-            ) {
-                Text("Auto-Alternativen", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                altOptions.forEach { (count, label) ->
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Einstellungen")
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
                     DropdownMenuItem(
-                        text = { 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = viewModel.autoAltCount == count, onClick = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(label) 
+                        text = {
+                            Column {
+                                Text("Routing Option")
+                                Text(currentAltLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
+                        leadingIcon = { Icon(Icons.Default.Route, null) },
+                        trailingIcon = { Icon(Icons.Default.ChevronRight, null) },
+                        onClick = { showAltSubMenu = true }
+                    )
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = { Text("Farben") },
+                        leadingIcon = { Icon(Icons.Default.Palette, null) },
                         onClick = {
-                            viewModel.updateAutoAltCount(count, context)
+                            showColorDialog = true
+                            showMenu = false
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Info") },
+                        leadingIcon = { Icon(Icons.Default.Info, null) },
+                        onClick = {
+                            showInfoDialog = true
+                            showMenu = false
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Rechtliches") },
+                        leadingIcon = { Icon(Icons.Default.Gavel, null) },
+                        onClick = {
+                            showLegalDialog = true
                             showMenu = false
                         }
                     )
                 }
 
-                HorizontalDivider()
-
-                DropdownMenuItem(
-                    text = { Text("Farben") },
-                    leadingIcon = { Icon(Icons.Default.Palette, null) },
-                    onClick = {
-                        showColorDialog = true
-                        showMenu = false
+                DropdownMenu(
+                    expanded = showAltSubMenu,
+                    onDismissRequest = { showAltSubMenu = false }
+                ) {
+                    altOptions.forEach { (count, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = {
+                                RadioButton(selected = viewModel.autoAltCount == count, onClick = null)
+                            },
+                            onClick = {
+                                viewModel.updateAutoAltCount(count, context)
+                                showAltSubMenu = false
+                                showMenu = false
+                            }
+                        )
                     }
-                )
-
-                DropdownMenuItem(
-                    text = { Text("Info") },
-                    leadingIcon = { Icon(Icons.Default.Info, null) },
-                    onClick = {
-                        showInfoDialog = true
-                        showMenu = false
-                    }
-                )
-
-                DropdownMenuItem(
-                    text = { Text("Rechtliches") },
-                    leadingIcon = { Icon(Icons.Default.Gavel, null) },
-                    onClick = {
-                        showLegalDialog = true
-                        showMenu = false
-                    }
-                )
+                }
             }
         }
     )
