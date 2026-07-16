@@ -721,8 +721,8 @@ fun MainTopAppBar(viewModel: MapViewModel) {
                     )
 
                     DropdownMenuItem(
-                        text = { Text("Info") },
-                        leadingIcon = { Icon(Icons.Default.Info, null) },
+                        text = { Text("Hilfe") },
+                        leadingIcon = { Icon(Icons.Default.Help, null) },
                         onClick = {
                             showInfoDialog = true
                             showMenu = false
@@ -766,7 +766,7 @@ fun MainTopAppBar(viewModel: MapViewModel) {
     }
 
     if (showInfoDialog) {
-        InfoDialog { showInfoDialog = false }
+        AppInfoDialog { showInfoDialog = false }
     }
 
     if (showLegalDialog) {
@@ -875,13 +875,13 @@ fun ColorRow(label: String, currentHex: String, onColorSelected: (String) -> Uni
 }
 
 @Composable
-fun InfoDialog(onDismiss: () -> Unit) {
+fun AppInfoDialog(onDismiss: () -> Unit) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Über", "Quellen", "Hilfe")
+    val tabs = listOf("Über", "Hilfe", "Quellen")
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Informationen") },
+        //title = { Text("Hilfe") },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
                 TabRow(selectedTabIndex = selectedTab) {
@@ -897,8 +897,41 @@ fun InfoDialog(onDismiss: () -> Unit) {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     when (selectedTab) {
                         0 -> AboutAppText()
-                        1 -> SourcesText()
-                        2 -> HowToText()
+                        1 -> HowToText()
+                        2 -> SourcesText()
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
+    )
+}
+
+@Composable
+fun LegalDialog(onDismiss: () -> Unit) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf( "Datenschutz", "Haftung") //"Impressum",
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rechtliche Informationen") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    when (selectedTab) {
+                        //0 -> ImpressumText()
+                        0-> DatenschutzText()
+                        1 -> HaftungText()
                     }
                 }
             }
@@ -914,6 +947,7 @@ fun AboutAppText() {
         Text("Diese App schließt die Lücke zwischen der komfortablen Routenplanung in Google Maps und der Nutzung auf dedizierten GPS-Geräten oder Fahrrad-Navis.", style = MaterialTheme.typography.bodySmall)
         Text("Sie extrahiert die Wegpunkte aus Google Maps Links und berechnet mithilfe der BRouter-Engine eine optimierte, fahrradtaugliche Route.", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(8.dp))
+        Text("© by Fredi Tschumi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Version 1.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -948,48 +982,17 @@ fun HowToText() {
 }
 
 @Composable
-fun LegalDialog(onDismiss: () -> Unit) {
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Datenschutz", "Haftung")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Rechtliche Informationen") },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
-                TabRow(selectedTabIndex = selectedTab) {
-                    tabs.forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = { Text(title, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    when (selectedTab) {
-                        0 -> DatenschutzText()
-                        1 -> HaftungText()
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } }
-    )
-}
-
-@Composable
 fun ImpressumText() {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Angaben gemäß § 5 TMG:", style = MaterialTheme.typography.labelLarge)
+        Text("© by Fredi Tschumi", style = MaterialTheme.typography.labelLarge)
+        /*Text("Angaben gemäß § 5 TMG:", style = MaterialTheme.typography.labelLarge)
         Text("[Dein Name/Unternehmen]\n[Deine Straße Hausnummer]\n[PLZ Ort]", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(8.dp))
         Text("Kontakt:", style = MaterialTheme.typography.labelLarge)
         Text("Telefon: [Deine Telefonnummer]\nE-Mail: [Deine E-Mail-Adresse]", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(8.dp))
         Text("Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:", style = MaterialTheme.typography.labelLarge)
-        Text("[Dein Name]\n[Deine Adresse]", style = MaterialTheme.typography.bodySmall)
+        Text("[Dein Name]\n[Deine Adresse]", style = MaterialTheme.typography.bodySmall)*/
     }
 }
 
@@ -1026,10 +1029,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
-    
+
     val configuration = LocalConfiguration.current
     val mapHeight = (configuration.screenHeightDp.dp * 0.45f).coerceIn(250.dp, 500.dp)
-    
+
     val profiles = listOf(
         "fastbike" to "Rennrad",
         "trekking" to "Trekking",
@@ -1043,7 +1046,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         //--"car-test" to "PKW",
         //--"direct" to "Google URL (nur Punkte)"
     )
-    
+
     var expandedProfile by remember { mutableStateOf(false) }
     val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
 
@@ -1173,7 +1176,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     Text("Alternativen berechnen")
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
 
             if (viewModel.routeOptions.isNotEmpty()) {
@@ -1233,7 +1236,7 @@ fun MapPreview(
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
-            
+
             val argbHex = when {
                 opt.isOriginal -> colors[4]
                 opt.title == "Hauptroute" -> colors[0]
@@ -1242,7 +1245,7 @@ fun MapPreview(
                 opt.title == "Alternative 3" -> colors[3]
                 else -> colors[3]
             }
-            
+
             // Convert ARGB to Leaflet color and opacity
             val colorObj = android.graphics.Color.parseColor(argbHex)
             val opacity = (android.graphics.Color.alpha(colorObj) / 255.0)
