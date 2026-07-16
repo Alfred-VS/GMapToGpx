@@ -880,12 +880,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         "mtb" to "MTB",
         "shortest" to "Kürzeste",
         "safety" to "Sicherste",
-        "vm-forum" to "Velomobil",
-        "hiking-soft" to "Wandern",
-        "hiking-mountain" to "Bergwandern",
-        "moped" to "Mofa/Moped",
-        "car-test" to "PKW",
-        "direct" to "Google URL (nur Punkte)"
+        //"vm-forum" to "Velomobil",
+        //"hiking-soft" to "Wandern",
+        "hiking-mountain" to "Wandern",//"Bergwandern",
+        "moped" to "Mofa/Moped"
+        //--"car-test" to "PKW",
+        //--"direct" to "Google URL (nur Punkte)"
     )
     
     var expandedProfile by remember { mutableStateOf(false) }
