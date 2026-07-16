@@ -16,6 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -46,6 +48,8 @@ private val jsonParser = Json { ignoreUnknownKeys = true }
 data class RouteOption(
     val title: String,
     val points: List<Pair<Double, Double>>,
+    val altitudes: List<Double> = emptyList(),
+    val distances: List<Double> = emptyList(),
     val gpxContent: String,
     val isOriginal: Boolean = false,
     val inputPoints: List<Pair<Double, Double>> = emptyList(),
@@ -58,6 +62,8 @@ data class RouteOption(
 
 data class BRouterResult(
     val points: List<Pair<Double, Double>>,
+    val altitudes: List<Double> = emptyList(),
+    val distances: List<Double> = emptyList(),
     val distance: Double = 0.0,
     val elevationGain: Int = 0,
     val elevationLoss: Int = 0,
@@ -201,7 +207,7 @@ class MapViewModel : ViewModel() {
                         // Nur die Original-Punkte anzeigen
                         val googleGpx = createGpx(points)
                         val dist = calculateDistance(points)
-                        options.add(RouteOption("Importierte Punkte", points, googleGpx, true, points, distanceMeters = dist))
+                        options.add(RouteOption("Importierte Punkte", points, emptyList(), emptyList(), googleGpx, true, points, distanceMeters = dist))
                     } else if (isBRouter) {
                         // BRouter Link: Nur diese eine Route laden, keine Alternativen
                         val urlProfile = "profile=([^&]+)".toRegex().find(resolvedUrl)?.groupValues?.get(1)
@@ -210,7 +216,7 @@ class MapViewModel : ViewModel() {
                         
                         status = "Lade BRouter Route ($profileName)..."
                         val result = getBikeRoute(points, effectiveProfile, 0)
-                        options.add(RouteOption("BRouter Import", result.points, createGpx(result.points), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds))
+                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
@@ -219,7 +225,7 @@ class MapViewModel : ViewModel() {
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
                         
-                        options.add(RouteOption("Hauptroute", mainRoute, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
+                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
                         
                         // Fetch Alternatives according to setting
                         for (i in 1..autoAltCount) {
@@ -228,7 +234,7 @@ class MapViewModel : ViewModel() {
                             val altRoute = altResult.points
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Alternative $i", altRoute, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
                             }
                         }
                     }
@@ -278,6 +284,17 @@ class MapViewModel : ViewModel() {
         return total
     }
 
+    private fun calculateDistanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon/2) * Math.sin(dLon/2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+        return r * c
+    }
+
     private suspend fun getBikeRoute(points: List<Pair<Double, Double>>, profile: String, altIdx: Int = 0): BRouterResult = withContext(Dispatchers.IO) {
         try {
             val coordsString = points.joinToString("|") { "${it.second},${it.first}" }
@@ -311,8 +328,7 @@ class MapViewModel : ViewModel() {
                 val filteredGain = gainStr?.toDoubleOrNull()?.toInt() ?: 0
                 val plainAscent = plainStr?.toDoubleOrNull()?.toInt() ?: 0
                 
-                // Berechnung des Abstiegs: Total Abstieg = Total Anstieg - Netto-Höhenunterschied
-                // BRouter liefert meist keinen "filtered descend" direkt im Header
+                // Berechnung des Abstiegs
                 var elevGain = filteredGain
                 var elevLoss = filteredGain - plainAscent
                 
@@ -324,44 +340,48 @@ class MapViewModel : ViewModel() {
                 val geometry = features[0].jsonObject["geometry"]?.jsonObject
                 val coordinates = geometry?.get("coordinates")?.jsonArray
                 
-                // Fallback: Manuelle Berechnung NUR wenn BRouter keine Daten lieferte (filteredGain == 0)
                 if (coordinates != null && coordinates.size >= 2) {
+                    val resPoints = mutableListOf<Pair<Double, Double>>()
+                    val resAlts = mutableListOf<Double>()
+                    val resDists = mutableListOf<Double>()
+                    var currentDist = 0.0
+                    var lastP: Pair<Double, Double>? = null
+
+                    coordinates.forEach {
+                        val p = it.jsonArray
+                        val lat = p[1].jsonPrimitive.double
+                        val lon = p[0].jsonPrimitive.double
+                        val alt = if (p.size >= 3) p[2].jsonPrimitive.double else 0.0
+                        
+                        lastP?.let { lp ->
+                            currentDist += calculateDistanceBetween(lp.first, lp.second, lat, lon)
+                        }
+                        
+                        resPoints.add(lat to lon)
+                        resAlts.add(alt)
+                        resDists.add(currentDist)
+                        lastP = lat to lon
+                    }
+
+                    // Fallback: Manuelle Berechnung NUR wenn BRouter keine Daten lieferte (filteredGain == 0)
                     if (elevGain <= 0) {
                         var calcGain = 0.0
                         var calcLoss = 0.0
                         var lastZ: Double? = null
-                        // Einfacher Hysteresefilter (3m) für die manuelle Berechnung
                         val threshold = 3.0 
                         
-                        for (i in 0 until coordinates.size) {
-                            val p = coordinates[i].jsonArray
-                            if (p.size >= 3) {
-                                val z = p[2].jsonPrimitive.doubleOrNull
-                                if (z != null) {
-                                    if (lastZ != null) {
-                                        val diff = z - lastZ
-                                        if (diff > threshold) {
-                                            calcGain += diff
-                                            lastZ = z
-                                        } else if (diff < -threshold) {
-                                            calcLoss += -diff
-                                            lastZ = z
-                                        }
-                                    } else {
-                                        lastZ = z
-                                    }
-                                }
-                            }
+                        for (z in resAlts) {
+                            if (lastZ != null) {
+                                val diff = z - lastZ
+                                if (diff > threshold) { calcGain += diff; lastZ = z } 
+                                else if (diff < -threshold) { calcLoss += -diff; lastZ = z }
+                            } else { lastZ = z }
                         }
                         elevGain = calcGain.toInt()
                         elevLoss = calcLoss.toInt()
                     }
                     
-                    val resultPoints = coordinates.map {
-                        val point = it.jsonArray
-                        point[1].jsonPrimitive.double to point[0].jsonPrimitive.double
-                    }
-                    return@withContext BRouterResult(resultPoints, dist, elevGain, elevLoss, totalTimeSeconds)
+                    return@withContext BRouterResult(resPoints, resAlts, resDists, dist, elevGain, elevLoss, totalTimeSeconds)
                 }
             }
         } catch (e: Exception) {
@@ -388,7 +408,7 @@ class MapViewModel : ViewModel() {
                     val altRoute = altResult.points
                     
                     if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
-                        currentOptions.add(RouteOption("Alternative $i", altRoute, createGpx(altRoute), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
                     }
                 }
                 routeOptions = currentOptions
@@ -1019,6 +1039,55 @@ fun HaftungText() {
     }
 }
 
+@Composable
+fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: Modifier = Modifier) {
+    if (altitudes.isEmpty() || altitudes.size != distances.size) return
+
+    val minAlt = (altitudes.minOrNull() ?: 0.0)
+    val maxAlt = (altitudes.maxOrNull() ?: 0.0)
+    val totalDist = distances.lastOrNull() ?: 1.0
+    val altRange = (maxAlt - minAlt).coerceAtLeast(10.0)
+
+    val color = MaterialTheme.colorScheme.primary
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Column(modifier = modifier) {
+        Canvas(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            val width = size.width
+            val height = size.height
+
+            val path = Path()
+            val fillPath = Path()
+
+            distances.forEachIndexed { i, d ->
+                val x = (d / totalDist * width).toFloat()
+                val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
+
+                if (i == 0) {
+                    path.moveTo(x, y)
+                    fillPath.moveTo(x, height)
+                    fillPath.lineTo(x, y)
+                } else {
+                    path.lineTo(x, y)
+                    fillPath.lineTo(x, y)
+                }
+                
+                if (i == distances.size - 1) {
+                    fillPath.lineTo(x, height)
+                    fillPath.close()
+                }
+            }
+
+            drawPath(fillPath, color = color.copy(alpha = 0.2f))
+            drawPath(path, color = color, style = Stroke(width = 2.dp.toPx()))
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("${minAlt.toInt()}m", style = MaterialTheme.typography.labelSmall, color = labelColor)
+            Text("${maxAlt.toInt()}m", style = MaterialTheme.typography.labelSmall, color = labelColor)
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
@@ -1064,15 +1133,27 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth(0.95f),
             title = { Text(option.title) },
             text = {
-                val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                val anstieg = "${option.elevationGain} hm"
-                val abstieg = "${option.elevationLoss} hm"
-                val timeText = if (option.totalTimeSeconds > 0) {
-                    val h = option.totalTimeSeconds / 3600
-                    val m = (option.totalTimeSeconds % 3600) / 60
-                    if (h > 0) "${h} h ${m} min" else "${m} min"
-                } else ""
-                Text("Distanz: $km\nAnstieg: $anstieg\nAbstieg: $abstieg\nZeit: $timeText")
+                Column {
+                    val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                    val anstieg = "${option.elevationGain} hm"
+                    val abstieg = "${option.elevationLoss} hm"
+                    val timeText = if (option.totalTimeSeconds > 0) {
+                        val h = option.totalTimeSeconds / 3600
+                        val m = (option.totalTimeSeconds % 3600) / 60
+                        if (h > 0) "${h} h ${m} min" else "${m} min"
+                    } else ""
+                    Text("Distanz: $km\nAnstieg: $anstieg\nAbstieg: $abstieg\nZeit: $timeText")
+                    
+                    if (option.altitudes.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        Text("Höhenprofil", style = MaterialTheme.typography.labelLarge)
+                        ElevationChart(
+                            altitudes = option.altitudes,
+                            distances = option.distances,
+                            modifier = Modifier.fillMaxWidth().height(100.dp).padding(top = 8.dp)
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(onClick = {
