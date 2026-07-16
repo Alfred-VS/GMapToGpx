@@ -102,7 +102,7 @@ class MapViewModel : ViewModel() {
             prefs = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
             bikeProfile = prefs?.getString("bike_profile", "fastbike") ?: "fastbike"
             autoAltCount = prefs?.getInt("auto_alt_count", 0) ?: 0
-            
+
             colorMain = prefs?.getString("color_main", "#FF0000FF") ?: "#FF0000FF"
             colorAlt1 = prefs?.getString("color_alt1", "#FFFF00FF") ?: "#FFFF00FF"
             colorAlt2 = prefs?.getString("color_alt2", "#FF00FFFF") ?: "#FF00FFFF"
@@ -311,7 +311,7 @@ class MapViewModel : ViewModel() {
 
             val responseText = connection.inputStream.bufferedReader().use { it.readText() }
             val json = jsonParser.parseToJsonElement(responseText).jsonObject
-            
+
             val features = json["features"]?.jsonArray
             if (features != null && features.isNotEmpty()) {
                 val properties = features[0].jsonObject["properties"]?.jsonObject
@@ -321,7 +321,7 @@ class MapViewModel : ViewModel() {
                 val dist = distStr?.toDoubleOrNull() ?: 0.0
                 
                 // Extrahiere Anstieg und Netto-Höhenunterschied
-                val gainStr = properties?.get("filtered ascend")?.jsonPrimitive?.content 
+                val gainStr = properties?.get("filtered ascend")?.jsonPrimitive?.content
                              ?: properties?.get("filtered-ascend")?.jsonPrimitive?.content
                 val plainStr = properties?.get("plain-ascend")?.jsonPrimitive?.content
                 
@@ -333,7 +333,7 @@ class MapViewModel : ViewModel() {
                 var elevLoss = filteredGain - plainAscent
                 
                 // Extrahiere Zeit robust
-                val timeStr = properties?.get("total-time")?.jsonPrimitive?.content 
+                val timeStr = properties?.get("total-time")?.jsonPrimitive?.content
                              ?: properties?.get("time")?.jsonPrimitive?.content
                 val totalTimeSeconds = timeStr?.toDoubleOrNull()?.toInt() ?: 0
 
@@ -369,7 +369,7 @@ class MapViewModel : ViewModel() {
                         var calcLoss = 0.0
                         var lastZ: Double? = null
                         val threshold = 3.0 
-                        
+
                         for (z in resAlts) {
                             if (lastZ != null) {
                                 val diff = z - lastZ
@@ -380,7 +380,7 @@ class MapViewModel : ViewModel() {
                         elevGain = calcGain.toInt()
                         elevLoss = calcLoss.toInt()
                     }
-                    
+
                     return@withContext BRouterResult(resPoints, resAlts, resDists, dist, elevGain, elevLoss, totalTimeSeconds)
                 }
             }
@@ -1052,6 +1052,13 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(modifier = modifier) {
+        Text(
+            "${maxAlt.toInt()} m",
+            style = MaterialTheme.typography.labelSmall,
+            color = labelColor,
+            modifier = Modifier.padding(bottom = 2.dp)
+        )
+
         Canvas(modifier = Modifier.fillMaxWidth().weight(1f)) {
             val width = size.width
             val height = size.height
@@ -1071,7 +1078,7 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
                     path.lineTo(x, y)
                     fillPath.lineTo(x, y)
                 }
-                
+
                 if (i == distances.size - 1) {
                     fillPath.lineTo(x, height)
                     fillPath.close()
@@ -1081,9 +1088,17 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
             drawPath(fillPath, color = color.copy(alpha = 0.2f))
             drawPath(path, color = color, style = Stroke(width = 2.dp.toPx()))
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("${minAlt.toInt()}m", style = MaterialTheme.typography.labelSmall, color = labelColor)
-            Text("${maxAlt.toInt()}m", style = MaterialTheme.typography.labelSmall, color = labelColor)
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("${minAlt.toInt()} m", style = MaterialTheme.typography.labelSmall, color = labelColor)
+            Text(
+                String.format(Locale.US, "%.1f km", totalDist / 1000.0),
+                style = MaterialTheme.typography.labelSmall,
+                color = labelColor
+            )
         }
     }
 }
