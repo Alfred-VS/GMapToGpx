@@ -29,6 +29,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
@@ -1106,6 +1107,70 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
     }
 }
 
+@Composable
+fun RouteDetailDialog(
+    option: RouteOption,
+    onDismiss: () -> Unit,
+    onShare: () -> Unit,
+    onEdit: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(option.title) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                val anstieg = "${option.elevationGain} m"
+                val abstieg = "${option.elevationLoss} m"
+                val timeText = if (option.totalTimeSeconds > 0) {
+                    val h = option.totalTimeSeconds / 3600
+                    val m = (option.totalTimeSeconds % 3600) / 60
+                    if (h > 0) "${h} h ${m} min" else "${m} min"
+                } else ""
+                
+                Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
+                    style = MaterialTheme.typography.bodySmall)
+
+                if (option.altitudes.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    ElevationChart(
+                        altitudes = option.altitudes,
+                        distances = option.distances,
+                        modifier = Modifier.fillMaxWidth().height(150.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            //TextButton(onClick = onDismiss) { Text("Schließen") }
+            //TextButton(onClick = onEdit) { Text("Edit") }
+        },
+        dismissButton = {
+            Row (horizontalArrangement = Arrangement.spacedBy(8.dp)){
+                //TextButton(onClick = onEdit) { Text("Edit") }
+                //TextButton(onClick = onShare) { Text("Teilen") }
+                OutlinedButton(
+                    onClick = onEdit,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
+                    Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                }
+
+                Button(
+                    onClick = onShare,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
@@ -1136,9 +1201,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
     var expandedProfile by remember { mutableStateOf(false) }
     val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
+    var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
 
     fun onPreview(option: RouteOption) {
         val inputPoints = option.inputPoints.ifEmpty { option.points }
+        if (inputPoints.isEmpty()) return
         val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
         val firstPoint = inputPoints.first()
         val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
@@ -1148,6 +1215,22 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         context.startActivity(intent)
     }
 
+
+    val currentDialogRoute = selectedRouteForDialog
+    if (currentDialogRoute != null) {
+        RouteDetailDialog(
+            option = currentDialogRoute,
+            onDismiss = { selectedRouteForDialog = null },
+            onShare = { 
+                scope.launch { viewModel.shareGpx(currentDialogRoute, context) }
+                selectedRouteForDialog = null
+            },
+            onEdit = { 
+                onPreview(currentDialogRoute)
+                selectedRouteForDialog = null
+            }
+        )
+    }
 
     if (viewModel.isMapFullscreen) {
         BackHandler { viewModel.isMapFullscreen = false }
@@ -1159,8 +1242,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 colors = colors,
                 selectedRouteIndex = pagerState.currentPage,
                 onRouteSelected = { index -> 
-                    scope.launch { pagerState.animateScrollToPage(index) }
-                    viewModel.isMapFullscreen = false
+                    val option = viewModel.routeOptions.getOrNull(index)
+                    if (option != null) {
+                        selectedRouteForDialog = option
+                        scope.launch { pagerState.scrollToPage(index) }
+                    }
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -1248,9 +1334,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         colors = colors,
                         selectedRouteIndex = pagerState.currentPage,
                         onRouteSelected = { index -> 
-                    scope.launch { pagerState.animateScrollToPage(index) }
-                    viewModel.isMapFullscreen = false
-                },
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                     SmallFloatingActionButton(
