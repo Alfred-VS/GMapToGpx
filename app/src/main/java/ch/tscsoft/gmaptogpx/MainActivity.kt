@@ -1111,7 +1111,7 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedRouteIndexForDialog by remember { mutableStateOf<Int?>(null) }
+    val pagerState = rememberPagerState(pageCount = { viewModel.routeOptions.size })
 
     val configuration = LocalConfiguration.current
     val mapHeight = (configuration.screenHeightDp.dp * 0.45f).coerceIn(250.dp, 500.dp)
@@ -1144,82 +1144,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         context.startActivity(intent)
     }
 
-    if (selectedRouteIndexForDialog != null) {
-        val pagerState = rememberPagerState(initialPage = selectedRouteIndexForDialog!!, pageCount = { viewModel.routeOptions.size })
-        val currentOption = viewModel.routeOptions.getOrNull(pagerState.currentPage)
-        
-        if (currentOption != null) {
-            AlertDialog(
-                onDismissRequest = { selectedRouteIndexForDialog = null },
-                modifier = Modifier.fillMaxWidth(0.95f),
-                title = { Text(currentOption.title) },
-                text = {
-                    HorizontalPager(state = pagerState) { page ->
-                        val option = viewModel.routeOptions[page]
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                            val anstieg = "${option.elevationGain} hm"
-                            val abstieg = "${option.elevationLoss} hm"
-                            val timeText = if (option.totalTimeSeconds > 0) {
-                                val h = option.totalTimeSeconds / 3600
-                                val m = (option.totalTimeSeconds % 3600) / 60
-                                if (h > 0) "${h} h ${m} min" else "${m} min"
-                            } else ""
-                            Text("Distanz: $km\nAnstieg: $anstieg\nAbstieg: $abstieg\nZeit: $timeText")
-                            
-                            if (option.altitudes.isNotEmpty()) {
-                                Spacer(Modifier.height(16.dp))
-                                Text("Höhenprofil", style = MaterialTheme.typography.labelLarge)
-                                ElevationChart(
-                                    altitudes = option.altitudes,
-                                    distances = option.distances,
-                                    modifier = Modifier.fillMaxWidth().height(100.dp).padding(top = 8.dp)
-                                )
-                            }
-                            
-                            if (viewModel.routeOptions.size > 1) {
-                                Spacer(Modifier.height(16.dp))
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    repeat(viewModel.routeOptions.size) { iteration ->
-                                        val color = if (pagerState.currentPage == iteration) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(2.dp)
-                                                .clip(CircleShape)
-                                                .background(color)
-                                                .size(6.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        scope.launch { viewModel.shareGpx(currentOption, context) }
-                        selectedRouteIndexForDialog = null
-                    }) {
-                        Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-                        Text(" Teilen")
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(onClick = {
-                        onPreview(currentOption)
-                        selectedRouteIndexForDialog = null
-                    }) {
-                        Icon(imageVector = Icons.Default.Language, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-                        Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                        Text(" Edit")
-                    }
-                }
-            )
-        }
-    }
 
     if (viewModel.isMapFullscreen) {
         BackHandler { viewModel.isMapFullscreen = false }
@@ -1229,7 +1153,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 visibleRoutes = viewModel.visibleRoutes,
                 currentProfile = viewModel.bikeProfile,
                 colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
-                onRouteSelected = { index -> selectedRouteIndexForDialog = index },
+                onRouteSelected = { index -> 
+                    scope.launch { pagerState.animateScrollToPage(index) }
+                    viewModel.isMapFullscreen = false
+                },
                 modifier = Modifier.fillMaxSize()
             )
             SmallFloatingActionButton(
@@ -1307,7 +1234,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         visibleRoutes = viewModel.visibleRoutes,
                         currentProfile = viewModel.bikeProfile,
                         colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
-                        onRouteSelected = { index -> selectedRouteIndexForDialog = index },
+                        onRouteSelected = { index -> 
+                    scope.launch { pagerState.animateScrollToPage(index) }
+                    viewModel.isMapFullscreen = false
+                },
                         modifier = Modifier.fillMaxSize()
                     )
                     SmallFloatingActionButton(
@@ -1321,16 +1251,100 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            viewModel.routeOptions.forEachIndexed { index, option ->
-                RouteOptionCard(
-                    option = option,
-                    isVisible = viewModel.visibleRoutes.contains(index),
-                    onToggleVisibility = { viewModel.toggleRouteVisibility(index) },
-                    onClick = { selectedRouteIndexForDialog = index },
-                    onShare = { scope.launch { viewModel.shareGpx(option, context) } },
-                    colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
+            if (viewModel.routeOptions.isNotEmpty()) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 0.dp),
+                    pageSpacing = 16.dp
+                ) { page ->
+                    val option = viewModel.routeOptions[page]
+                    val routeColorHex = when {
+                        option.isOriginal -> viewModel.colorOriginal
+                        option.title == "Hauptroute" -> viewModel.colorMain
+                        option.title == "Alternative 1" -> viewModel.colorAlt1
+                        option.title == "Alternative 2" -> viewModel.colorAlt2
+                        option.title == "Alternative 3" -> viewModel.colorAlt3
+                        else -> viewModel.colorAlt3
+                    }
+                    val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
+
+                    ElevatedCard(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(option.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                Checkbox(
+                                    checked = viewModel.visibleRoutes.contains(page),
+                                    onCheckedChange = { viewModel.toggleRouteVisibility(page) },
+                                    colors = CheckboxDefaults.colors(checkedColor = routeColor)
+                                )
+                            }
+
+                            val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                            val anstieg = "${option.elevationGain} hm"
+                            val abstieg = "${option.elevationLoss} hm"
+                            val timeText = if (option.totalTimeSeconds > 0) {
+                                val h = option.totalTimeSeconds / 3600
+                                val m = (option.totalTimeSeconds % 3600) / 60
+                                if (h > 0) "${h} h ${m} min" else "${m} min"
+                            } else ""
+                            
+                            Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
+                                style = MaterialTheme.typography.bodySmall)
+
+                            if (option.altitudes.isNotEmpty()) {
+                                Spacer(Modifier.height(12.dp))
+                                //Text("Höhenprofil", style = MaterialTheme.typography.labelSmall)
+                                ElevationChart(
+                                    altitudes = option.altitudes,
+                                    distances = option.distances,
+                                    modifier = Modifier.fillMaxWidth().height(80.dp).padding(top = 4.dp)
+                                )
+                            }
+                            
+                            Spacer(Modifier.height(16.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { scope.launch { viewModel.shareGpx(option, context) } },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
+                                }
+                                OutlinedButton(
+                                    onClick = { onPreview(option) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
+                                    Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (viewModel.routeOptions.size > 1) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        repeat(viewModel.routeOptions.size) { iteration ->
+                            val color = if (pagerState.currentPage == iteration) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                            Box(
+                                modifier = Modifier
+                                    .padding(2.dp)
+                                    .clip(CircleShape)
+                                    .background(color)
+                                    .size(6.dp)
+                            )
+                        }
+                    }
+                }
             }
 
             if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
@@ -1472,49 +1486,3 @@ fun MapPreview(
     )
 }
 
-@Composable
-fun RouteOptionCard(
-    option: RouteOption,
-    isVisible: Boolean,
-    onToggleVisibility: () -> Unit,
-    onClick: () -> Unit,
-    onShare: () -> Unit,
-    colors: List<String>
-) {
-    val routeColorHex = when {
-        option.isOriginal -> colors[4]
-        option.title == "Hauptroute" -> colors[0]
-        option.title == "Alternative 1" -> colors[1]
-        option.title == "Alternative 2" -> colors[2]
-        option.title == "Alternative 3" -> colors[3]
-        else -> colors[3]
-    }
-    val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
-    val timeText = if (option.totalTimeSeconds > 0) {
-        val h = option.totalTimeSeconds / 3600
-        val m = (option.totalTimeSeconds % 3600) / 60
-        if (h > 0) "${h}h ${m}m" else "${m}m"
-    } else ""
-    val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-
-    ElevatedCard(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = option.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = onShare) {
-                Icon(imageVector = Icons.Default.Share, contentDescription = "Teilen", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-            }
-            if (option.distanceMeters > 0) {
-                Text(text = if (timeText.isNotEmpty()) "$km • $timeText" else km, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Checkbox(
-                checked = isVisible,
-                onCheckedChange = { onToggleVisibility() },
-                colors = CheckboxDefaults.colors(checkedColor = routeColor, uncheckedColor = MaterialTheme.colorScheme.outline)
-            )
-        }
-    }
-}
