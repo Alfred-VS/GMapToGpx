@@ -1172,32 +1172,52 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Profile Dropdown on Main Page
-            ExposedDropdownMenuBox(
-                expanded = expandedProfile,
-                onExpandedChange = { expandedProfile = !expandedProfile },
-                modifier = Modifier.fillMaxWidth()
+            // Profile Dropdown and Refresh Button on Main Page
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
-                    value = currentProfileLabel,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Routing Profil") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                )
-                ExposedDropdownMenu(
+                val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+                val isDirect = viewModel.bikeProfile == "direct"
+                val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+                val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
+
+                ExposedDropdownMenuBox(
                     expanded = expandedProfile,
-                    onDismissRequest = { expandedProfile = false }
+                    onExpandedChange = { expandedProfile = !expandedProfile },
+                    modifier = Modifier.weight(1f)
                 ) {
-                    profiles.forEach { (id, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                viewModel.updateProfile(id, context)
-                                expandedProfile = false
-                            }
-                        )
+                    OutlinedTextField(
+                        value = currentProfileLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Routing Profil") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedProfile,
+                        onDismissRequest = { expandedProfile = false }
+                    ) {
+                        profiles.forEach { (id, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    viewModel.updateProfile(id, context)
+                                    expandedProfile = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (canFetchAlts) {
+                    IconButton(
+                        onClick = { viewModel.fetchAlternatives() },
+                        modifier = Modifier.padding(top = 8.dp) // Align slightly with text field
+                    ) {
+                        Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
@@ -1212,18 +1232,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 CircularProgressIndicator(modifier = Modifier.size(32.dp))
             }
 
-            val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
-            val isDirect = viewModel.bikeProfile == "direct"
-            val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
-
-            if (viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = { viewModel.fetchAlternatives() }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                    Text("Alternativen berechnen")
-                }
-            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
