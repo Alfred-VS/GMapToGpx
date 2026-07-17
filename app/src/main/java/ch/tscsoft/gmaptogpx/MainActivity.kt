@@ -1114,7 +1114,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val pagerState = rememberPagerState(pageCount = { viewModel.routeOptions.size })
 
     val configuration = LocalConfiguration.current
-    val mapHeight = (configuration.screenHeightDp.dp * 0.45f).coerceIn(250.dp, 500.dp)
+    val mapHeight = (configuration.screenHeightDp.dp * 0.45f - 8.dp).coerceIn(240.dp, 500.dp)
 
     val colors = remember(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal) {
         listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
@@ -1197,9 +1197,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         value = currentProfileLabel,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Routing Profil") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
-                        modifier = Modifier.menuAnchor().fillMaxWidth()
+                        modifier = Modifier.menuAnchor().fillMaxWidth().height(56.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium
                     )
                     ExposedDropdownMenu(
                         expanded = expandedProfile,
@@ -1219,8 +1219,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                 if (canFetchAlts) {
                     IconButton(
-                        onClick = { viewModel.fetchAlternatives() },
-                        modifier = Modifier.padding(top = 8.dp) // Align slightly with text field
+                        onClick = { viewModel.fetchAlternatives() }
                     ) {
                         Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -1286,7 +1285,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     ElevatedCard(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                        Column(modifier = Modifier.padding(16.dp ,4.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(option.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                                 Checkbox(
@@ -1297,8 +1296,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             }
 
                             val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                            val anstieg = "${option.elevationGain} hm"
-                            val abstieg = "${option.elevationLoss} hm"
+                            val anstieg = "${option.elevationGain} m"
+                            val abstieg = "${option.elevationLoss} m"
                             val timeText = if (option.totalTimeSeconds > 0) {
                                 val h = option.totalTimeSeconds / 3600
                                 val m = (option.totalTimeSeconds % 3600) / 60
@@ -1320,14 +1319,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             
                             Spacer(Modifier.height(16.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = { scope.launch { viewModel.shareGpx(option, context) } },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
-                                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
-                                }
+
                                 OutlinedButton(
                                     onClick = { onPreview(option) },
                                     modifier = Modifier.weight(1f),
@@ -1335,6 +1327,15 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 ) {
                                     Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
                                     Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                                }
+
+                                Button(
+                                    onClick = { scope.launch { viewModel.shareGpx(option, context) } },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
