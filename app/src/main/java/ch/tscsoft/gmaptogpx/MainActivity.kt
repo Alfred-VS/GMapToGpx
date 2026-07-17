@@ -1116,6 +1116,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val configuration = LocalConfiguration.current
     val mapHeight = (configuration.screenHeightDp.dp * 0.45f).coerceIn(250.dp, 500.dp)
 
+    val colors = remember(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal) {
+        listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
+    }
+
     val profiles = listOf(
         "fastbike" to "Rennrad",
         "trekking" to "Trekking",
@@ -1152,7 +1156,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 options = viewModel.routeOptions,
                 visibleRoutes = viewModel.visibleRoutes,
                 currentProfile = viewModel.bikeProfile,
-                colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
+                colors = colors,
+                selectedRouteIndex = pagerState.currentPage,
                 onRouteSelected = { index -> 
                     scope.launch { pagerState.animateScrollToPage(index) }
                     viewModel.isMapFullscreen = false
@@ -1241,7 +1246,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         options = viewModel.routeOptions,
                         visibleRoutes = viewModel.visibleRoutes,
                         currentProfile = viewModel.bikeProfile,
-                        colors = listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal),
+                        colors = colors,
+                        selectedRouteIndex = pagerState.currentPage,
                         onRouteSelected = { index -> 
                     scope.launch { pagerState.animateScrollToPage(index) }
                     viewModel.isMapFullscreen = false
@@ -1372,9 +1378,11 @@ fun MapPreview(
     visibleRoutes: Set<Int>,
     currentProfile: String,
     colors: List<String>,
+    selectedRouteIndex: Int = -1,
     onRouteSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Only reload the full HTML if routes or colors change
     val htmlContent = remember(options, visibleRoutes, currentProfile, colors) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
@@ -1389,7 +1397,6 @@ fun MapPreview(
                 else -> colors[3]
             }
 
-            // Convert ARGB to Leaflet color and opacity
             val colorObj = android.graphics.Color.parseColor(argbHex)
             val opacity = (android.graphics.Color.alpha(colorObj) / 255.0)
             val rgbHex = String.format("#%06X", (0xFFFFFF and colorObj))
@@ -1414,7 +1421,6 @@ fun MapPreview(
                 body { margin: 0; padding: 0; }
                 .leaflet-interactive { cursor: pointer; }
                 .route-label { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; pointer-events: auto !important; }
-                .route-label:before { display: none !important; }
                 .label-inner { border: 1px solid #333; border-radius: 3px; padding: 1px 2px; font-size: 12px; line-height: 1.1; font-weight: bold; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.2); white-space: nowrap; }
             </style>
         </head>
@@ -1423,8 +1429,11 @@ fun MapPreview(
             <script>
                 var map = L.map('map');
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
-                var routes = $jsonString;
+                var routesData = $jsonString;
+                var routeLayers = [];
+                var labelLayers = [];
                 var group = new L.featureGroup();
+
                 function isLight(color) {
                     var r, g, b, hsp;
                     color = color.replace('#', '');
@@ -1433,33 +1442,77 @@ fun MapPreview(
                     hsp = Math.sqrt(0.299 * (r * r) + 0.587 * (g * g) + 0.114 * (b * b));
                     return hsp > 127.5;
                 }
-                routes.forEach(function(route, index) {
-                    if (!route.isVisible || route.points.length === 0) return;
+
+                function highlightRoute(selectedIndex) {
+                    routeLayers.forEach(function(layer, index) {
+                        var route = routesData[index];
+                        if (!route.isVisible) return;
+                        var isSelected = (index === selectedIndex);
+                        
+                        layer.setStyle({
+                            opacity: isSelected ? 1.0 : (route.opacity * 0.7),
+                            weight: isSelected ? 5 : ((index === 0 && !route.isOriginal) ? 4 : 2.5)
+                        });
+                        if (isSelected) layer.bringToFront();
+                        
+                        var label = labelLayers[index];
+                        if (label) {
+                            var textColor = isLight(route.color) ? 'black' : 'white';
+                            var opacity = isSelected ? 1.0 : (route.opacity * 0.8);
+                            var labelText = route.km;
+                            //if (route.time) labelText += " " + route.time ;
+                            if (route.isOriginal) labelText = "G: " + labelText;
+                            
+                            var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + (isSelected ? 'black' : route.color) + '; border-width:' + (isSelected ? '2px' : '1px') + '; color:' + textColor + '; opacity:' + opacity + ';">' + labelText + '</div>';
+                            label.setContent(content);
+                            if (isSelected) label.bringToFront();
+                        }
+                    });
+                }
+
+                routesData.forEach(function(route, index) {
+                    if (!route.isVisible || route.points.length === 0) {
+                        routeLayers.push(null);
+                        labelLayers.push(null);
+                        return;
+                    }
                     var polyline = L.polyline(route.points, { 
                         color: route.color, 
-                        opacity: route.opacity,
-                        weight: (route.index === 0 && !route.isOriginal) ? 6 : 4, 
+                        opacity: route.opacity * 0.7,
+                        weight: (index === 0 && !route.isOriginal) ? 4 : 2.5,
                         interactive: true 
                     }).addTo(map);
+                    
                     var openFn = function() { if (window.Android) window.Android.selectRoute(route.index); };
                     polyline.on('click', openFn);
-                    var labelText = route.km;
-                    if (route.time) labelText += " " + route.time ;
-                    if (route.isOriginal) labelText = "G: " + labelText;
+                    
+                    var tooltip = null;
                     if (route.points.length > 2) {
                         var positions = [0.5, 0.3, 0.7, 0.4, 0.6];
                         var posFactor = positions[index % positions.length];
                         var targetIdx = Math.floor(route.points.length * posFactor);
                         var pos = route.points[targetIdx];
                         var textColor = isLight(route.color) ? 'black' : 'white';
-                        var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + '; opacity:' + route.opacity + ';">' + labelText + '</div>';
-                        var tooltip = L.tooltip({ permanent: true, direction: 'top', className: 'route-label', interactive: true, offset: [0, -5] }).setLatLng(pos).setContent(content).addTo(map);
+                        var labelText = route.km;
+                        if (route.time) labelText += " " + route.time ;
+                        if (route.isOriginal) labelText = "G: " + labelText;
+                        
+                        var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + '; opacity:' + (route.opacity * 0.8) + ';">' + labelText + '</div>';
+                        tooltip = L.tooltip({ permanent: true, direction: 'top', className: 'route-label', interactive: true, offset: [0, -5] }).setLatLng(pos).setContent(content).addTo(map);
                         tooltip.on('click', openFn);
                     }
+                    
+                    routeLayers.push(polyline);
+                    labelLayers.push(tooltip);
                     group.addLayer(polyline);
                 });
+
                 if (group.getLayers().length > 0) {
-                    setTimeout(function() { map.invalidateSize(); map.fitBounds(group.getBounds().pad(0.1)); }, 200);
+                    setTimeout(function() { 
+                        map.invalidateSize(); 
+                        map.fitBounds(group.getBounds().pad(0.1)); 
+                        highlightRoute($selectedRouteIndex);
+                    }, 200);
                 }
             </script>
         </body>
@@ -1489,6 +1542,9 @@ fun MapPreview(
             if (webView.tag != htmlContent) {
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 webView.tag = htmlContent
+            } else {
+                // If only selectedRouteIndex changed, use JS to update
+                webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
             }
         }
     )
