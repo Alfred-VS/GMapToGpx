@@ -1178,9 +1178,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { viewModel.routeOptions.size })
 
-    val configuration = LocalConfiguration.current
-    val mapHeight = (configuration.screenHeightDp.dp * 0.45f - 8.dp).coerceIn(240.dp, 500.dp)
-
     val colors = remember(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal) {
         listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
     }
@@ -1191,272 +1188,288 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         "mtb" to "MTB",
         "shortest" to "Kürzeste",
         "safety" to "Sicherste",
-        //"vm-forum" to "Velomobil",
-        //"hiking-soft" to "Wandern",
-        "hiking-mountain" to "Wandern",//"Bergwandern",
+        "hiking-mountain" to "Wandern",
         "moped" to "Mofa/Moped"
-        //--"car-test" to "PKW",
-        //--"direct" to "Google URL (nur Punkte)"
     )
 
     var expandedProfile by remember { mutableStateOf(false) }
     val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
 
-    fun onPreview(option: RouteOption) {
-        val inputPoints = option.inputPoints.ifEmpty { option.points }
-        if (inputPoints.isEmpty()) return
-        val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
-        val firstPoint = inputPoints.first()
-        val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
-        val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
-        val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
-        context.startActivity(intent)
-    }
-
-
-    val currentDialogRoute = selectedRouteForDialog
-    if (currentDialogRoute != null) {
-        RouteDetailDialog(
-            option = currentDialogRoute,
-            onDismiss = { selectedRouteForDialog = null },
-            onShare = { 
-                scope.launch { viewModel.shareGpx(currentDialogRoute, context) }
-                selectedRouteForDialog = null
-            },
-            onEdit = { 
-                onPreview(currentDialogRoute)
-                selectedRouteForDialog = null
-            }
-        )
-    }
-
-    if (viewModel.isMapFullscreen) {
-        BackHandler { viewModel.isMapFullscreen = false }
-        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            MapPreview(
-                options = viewModel.routeOptions,
-                visibleRoutes = viewModel.visibleRoutes,
-                currentProfile = viewModel.bikeProfile,
-                colors = colors,
-                selectedRouteIndex = pagerState.currentPage,
-                onRouteSelected = { index -> 
-                    val option = viewModel.routeOptions.getOrNull(index)
-                    if (option != null) {
-                        selectedRouteForDialog = option
-                        scope.launch { pagerState.scrollToPage(index) }
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-            SmallFloatingActionButton(
-                onClick = { viewModel.isMapFullscreen = false },
-                modifier = Modifier.padding(16.dp).align(Alignment.TopEnd),
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-            ) {
-                Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
-            }
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val totalHeight = maxHeight
+        val fixedElementsHeight = 240.dp // Estimated height of text, buttons, and padding
+        val minMapHeight = 200.dp
+        val minChartHeight = 80.dp
+        
+        val availableDynamicSpace = totalHeight - fixedElementsHeight
+        
+        val (mapHeight, chartHeight) = if (availableDynamicSpace > (minMapHeight + minChartHeight)) {
+            val excess = availableDynamicSpace - (minMapHeight + minChartHeight)
+            // Distribute excess space: Give chart up to 35% of excess (capped at 200.dp), map takes the rest
+            val cH = (minChartHeight + excess * 0.35f).coerceAtMost(200.dp)
+            val mH = availableDynamicSpace - cH
+            mH to cH
+        } else {
+            minMapHeight to minChartHeight
         }
-    } else {
-        Column(
-            modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // Profile Dropdown and Refresh Button on Main Page
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
-                val isDirect = viewModel.bikeProfile == "direct"
-                val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
-                val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
 
-                ExposedDropdownMenuBox(
-                    expanded = expandedProfile,
-                    onExpandedChange = { expandedProfile = !expandedProfile },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    OutlinedTextField(
-                        value = currentProfileLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
-                        modifier = Modifier.menuAnchor().fillMaxWidth().height(56.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expandedProfile,
-                        onDismissRequest = { expandedProfile = false }
-                    ) {
-                        profiles.forEach { (id, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    viewModel.updateProfile(id, context)
-                                    expandedProfile = false
-                                }
-                            )
+        fun onPreview(option: RouteOption) {
+            val inputPoints = option.inputPoints.ifEmpty { option.points }
+            if (inputPoints.isEmpty()) return
+            val coordsString = inputPoints.joinToString(";") { "${it.second},${it.first}" }
+            val firstPoint = inputPoints.first()
+            val profile = if (option.isOriginal) "trekking" else viewModel.bikeProfile
+            val altPart = if (option.isOriginal) "" else "&alternativeidx=${option.alternativeIdx}"
+            val previewUrl = "https://brouter.de/brouter-web/#map=13/${firstPoint.first}/${firstPoint.second}/standard&lonlats=$coordsString&profile=$profile$altPart"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(previewUrl))
+            context.startActivity(intent)
+        }
+
+
+        val currentDialogRoute = selectedRouteForDialog
+        if (currentDialogRoute != null) {
+            RouteDetailDialog(
+                option = currentDialogRoute,
+                onDismiss = { selectedRouteForDialog = null },
+                onShare = { 
+                    scope.launch { viewModel.shareGpx(currentDialogRoute, context) }
+                    selectedRouteForDialog = null
+                },
+                onEdit = { 
+                    onPreview(currentDialogRoute)
+                    selectedRouteForDialog = null
+                }
+            )
+        }
+
+        if (viewModel.isMapFullscreen) {
+            BackHandler { viewModel.isMapFullscreen = false }
+            Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                MapPreview(
+                    options = viewModel.routeOptions,
+                    visibleRoutes = viewModel.visibleRoutes,
+                    currentProfile = viewModel.bikeProfile,
+                    colors = colors,
+                    selectedRouteIndex = pagerState.currentPage,
+                    onRouteSelected = { index -> 
+                        val option = viewModel.routeOptions.getOrNull(index)
+                        if (option != null) {
+                            selectedRouteForDialog = option
+                            scope.launch { pagerState.scrollToPage(index) }
                         }
-                    }
-                }
-
-                if (canFetchAlts) {
-                    IconButton(
-                        onClick = { viewModel.fetchAlternatives() }
-                    ) {
-                        Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-
-            if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)
-            }
-
-            if (viewModel.isProcessing) {
-                Spacer(modifier = Modifier.height(8.dp))
-                CircularProgressIndicator(modifier = Modifier.size(32.dp))
-            }
-
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (viewModel.routeOptions.isNotEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
-                    MapPreview(
-                        options = viewModel.routeOptions,
-                        visibleRoutes = viewModel.visibleRoutes,
-                        currentProfile = viewModel.bikeProfile,
-                        colors = colors,
-                        selectedRouteIndex = pagerState.currentPage,
-                        onRouteSelected = { index -> 
-                            scope.launch { pagerState.animateScrollToPage(index) }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    SmallFloatingActionButton(
-                        onClick = { viewModel.isMapFullscreen = true },
-                        modifier = Modifier.padding(8.dp).align(Alignment.TopEnd),
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                    ) {
-                        Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            if (viewModel.routeOptions.isNotEmpty()) {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 0.dp),
-                    pageSpacing = 16.dp
-                ) { page ->
-                    val option = viewModel.routeOptions[page]
-                    val routeColorHex = when {
-                        option.isOriginal -> viewModel.colorOriginal
-                        option.title == "Hauptroute" -> viewModel.colorMain
-                        option.title == "Alternative 1" -> viewModel.colorAlt1
-                        option.title == "Alternative 2" -> viewModel.colorAlt2
-                        option.title == "Alternative 3" -> viewModel.colorAlt3
-                        else -> viewModel.colorAlt3
-                    }
-                    val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
-
-                    ElevatedCard(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp ,4.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(option.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                                Checkbox(
-                                    checked = viewModel.visibleRoutes.contains(page),
-                                    onCheckedChange = { viewModel.toggleRouteVisibility(page) },
-                                    colors = CheckboxDefaults.colors(checkedColor = routeColor)
-                                )
-                            }
-
-                            val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
-                            val anstieg = "${option.elevationGain} m"
-                            val abstieg = "${option.elevationLoss} m"
-                            val timeText = if (option.totalTimeSeconds > 0) {
-                                val h = option.totalTimeSeconds / 3600
-                                val m = (option.totalTimeSeconds % 3600) / 60
-                                if (h > 0) "${h} h ${m} min" else "${m} min"
-                            } else ""
-                            
-                            Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
-                                style = MaterialTheme.typography.bodySmall)
-
-                            if (option.altitudes.isNotEmpty()) {
-                                Spacer(Modifier.height(12.dp))
-                                //Text("Höhenprofil", style = MaterialTheme.typography.labelSmall)
-                                ElevationChart(
-                                    altitudes = option.altitudes,
-                                    distances = option.distances,
-                                    modifier = Modifier.fillMaxWidth().height(80.dp).padding(top = 4.dp)
-                                )
-                            }
-                            
-                            Spacer(Modifier.height(16.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-
-                                OutlinedButton(
-                                    onClick = { onPreview(option) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
-                                    Text(" Edit", style = MaterialTheme.typography.labelMedium)
-                                }
-
-                                Button(
-                                    onClick = { scope.launch { viewModel.shareGpx(option, context) } },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
-                                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (viewModel.routeOptions.size > 1) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        repeat(viewModel.routeOptions.size) { iteration ->
-                            val color = if (pagerState.currentPage == iteration) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                            Box(
-                                modifier = Modifier
-                                    .padding(2.dp)
-                                    .clip(CircleShape)
-                                    .background(color)
-                                    .size(6.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
-                Text(
-                    text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 32.dp)
+                    },
+                    modifier = Modifier.fillMaxSize()
                 )
+                SmallFloatingActionButton(
+                    onClick = { viewModel.isMapFullscreen = false },
+                    modifier = Modifier.padding(16.dp).align(Alignment.TopEnd),
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                ) {
+                    Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Profile Dropdown and Refresh Button on Main Page
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+                    val isDirect = viewModel.bikeProfile == "direct"
+                    val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+                    val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
+
+                    ExposedDropdownMenuBox(
+                        expanded = expandedProfile,
+                        onExpandedChange = { expandedProfile = !expandedProfile },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        OutlinedTextField(
+                            value = currentProfileLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth().height(56.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedProfile,
+                            onDismissRequest = { expandedProfile = false }
+                        ) {
+                            profiles.forEach { (id, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        viewModel.updateProfile(id, context)
+                                        expandedProfile = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (canFetchAlts) {
+                        IconButton(
+                            onClick = { viewModel.fetchAlternatives() }
+                        ) {
+                            Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+
+                if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)
+                }
+
+                if (viewModel.isProcessing) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                }
+
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (viewModel.routeOptions.isNotEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
+                        MapPreview(
+                            options = viewModel.routeOptions,
+                            visibleRoutes = viewModel.visibleRoutes,
+                            currentProfile = viewModel.bikeProfile,
+                            colors = colors,
+                            selectedRouteIndex = pagerState.currentPage,
+                            onRouteSelected = { index -> 
+                                scope.launch { pagerState.animateScrollToPage(index) }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.isMapFullscreen = true },
+                            modifier = Modifier.padding(8.dp).align(Alignment.TopEnd),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                if (viewModel.routeOptions.isNotEmpty()) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 0.dp),
+                        pageSpacing = 16.dp
+                    ) { page ->
+                        val option = viewModel.routeOptions[page]
+                        val routeColorHex = when {
+                            option.isOriginal -> viewModel.colorOriginal
+                            option.title == "Hauptroute" -> viewModel.colorMain
+                            option.title == "Alternative 1" -> viewModel.colorAlt1
+                            option.title == "Alternative 2" -> viewModel.colorAlt2
+                            option.title == "Alternative 3" -> viewModel.colorAlt3
+                            else -> viewModel.colorAlt3
+                        }
+                        val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
+
+                        ElevatedCard(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp ,4.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(option.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                    Checkbox(
+                                        checked = viewModel.visibleRoutes.contains(page),
+                                        onCheckedChange = { viewModel.toggleRouteVisibility(page) },
+                                        colors = CheckboxDefaults.colors(checkedColor = routeColor)
+                                    )
+                                }
+
+                                val km = String.format(Locale.US, "%.1f km", option.distanceMeters / 1000.0)
+                                val anstieg = "${option.elevationGain} m"
+                                val abstieg = "${option.elevationLoss} m"
+                                val timeText = if (option.totalTimeSeconds > 0) {
+                                    val h = option.totalTimeSeconds / 3600
+                                    val m = (option.totalTimeSeconds % 3600) / 60
+                                    if (h > 0) "${h} h ${m} min" else "${m} min"
+                                } else ""
+                                
+                                Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
+                                    style = MaterialTheme.typography.bodySmall)
+
+                                if (option.altitudes.isNotEmpty()) {
+                                    Spacer(Modifier.height(12.dp))
+                                    //Text("Höhenprofil", style = MaterialTheme.typography.labelSmall)
+                                    ElevationChart(
+                                        altitudes = option.altitudes,
+                                        distances = option.distances,
+                                        modifier = Modifier.fillMaxWidth().height(chartHeight).padding(top = 4.dp)
+                                    )
+                                }
+                                
+                                Spacer(Modifier.height(16.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                                    OutlinedButton(
+                                        onClick = { onPreview(option) },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
+                                        Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                                    }
+
+                                    Button(
+                                        onClick = { scope.launch { viewModel.shareGpx(option, context) } },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                        Text(" Teilen", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (viewModel.routeOptions.size > 1) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            repeat(viewModel.routeOptions.size) { iteration ->
+                                val color = if (pagerState.currentPage == iteration) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                Box(
+                                    modifier = Modifier
+                                        .padding(2.dp)
+                                        .clip(CircleShape)
+                                        .background(color)
+                                        .size(6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
+                    Text(
+                        text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                }
             }
         }
     }
 }
+
 
 @Composable
 fun MapPreview(
