@@ -1927,7 +1927,7 @@ fun MapPreview(
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(options, visibleRoutes, currentProfile, colors, mapType) {
+    val htmlContent = remember(options, visibleRoutes, currentProfile, colors) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
@@ -1977,6 +1977,16 @@ fun MapPreview(
                 var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
                     attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EBP, and the GIS User Community'
                 });
+
+                window.setMapType = function(type) {
+                    if (type === 'satellite') {
+                        map.removeLayer(osm);
+                        satellite.addTo(map);
+                    } else {
+                        map.removeLayer(satellite);
+                        osm.addTo(map);
+                    }
+                };
 
                 if ('$mapType' === 'satellite') {
                     satellite.addTo(map);
@@ -2138,6 +2148,7 @@ fun MapPreview(
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 webView.tag = htmlContent
             } else {
+                webView.evaluateJavascript("setMapType('$mapType')", null)
                 webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
                 webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
             }
