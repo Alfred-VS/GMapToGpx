@@ -135,7 +135,7 @@ class MapViewModel : ViewModel() {
     var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
     var centerOnUserRequested by mutableStateOf(false)
 
-    fun updateLocation(context: android.content.Context, centerOnUser: Boolean = false) {
+    fun updateLocation(context: android.content.Context, centerOnUser: Boolean = false, highlightOnRoute: Int? = null) {
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
@@ -144,6 +144,9 @@ class MapViewModel : ViewModel() {
                         userLocation = location.latitude to location.longitude
                         if (centerOnUser) {
                             centerOnUserRequested = true
+                        }
+                        if (highlightOnRoute != null) {
+                            highlightNearestPointToUser(highlightOnRoute)
                         }
                     }
                 }
@@ -231,6 +234,24 @@ class MapViewModel : ViewModel() {
     fun setHighlight(routeIdx: Int?, pointIdx: Int?) {
         highlightedRouteIndex = routeIdx
         highlightedPointIndex = pointIdx
+    }
+
+    fun highlightNearestPointToUser(routeIdx: Int) {
+        val loc = userLocation ?: return
+        val option = routeOptions.getOrNull(routeIdx) ?: return
+        if (option.points.isEmpty()) return
+
+        var minDist = Double.MAX_VALUE
+        var bestIdx = 0
+        
+        option.points.forEachIndexed { idx, point ->
+            val d = Math.pow(loc.first - point.first, 2.0) + Math.pow(loc.second - point.second, 2.0)
+            if (d < minDist) {
+                minDist = d
+                bestIdx = idx
+            }
+        }
+        setHighlight(routeIdx, bestIdx)
     }
 
     fun updateMapType(type: String) {
@@ -1691,7 +1712,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions.values.any { it }) {
-            viewModel.updateLocation(context, centerOnUser = true)
+            viewModel.updateLocation(context, centerOnUser = true, highlightOnRoute = pagerState.currentPage)
         }
     }
 
@@ -1699,7 +1720,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
         val coarseLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (fineLocation == PackageManager.PERMISSION_GRANTED || coarseLocation == PackageManager.PERMISSION_GRANTED) {
-            viewModel.updateLocation(context, centerOnUser = true)
+            viewModel.updateLocation(context, centerOnUser = true, highlightOnRoute = pagerState.currentPage)
         } else {
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -1775,6 +1796,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     userLocation = viewModel.userLocation,
                     centerOnUserRequested = viewModel.centerOnUserRequested,
                     onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                    onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
                     onRouteSelected = { index -> 
                         val option = viewModel.routeOptions.getOrNull(index)
                         if (option != null) {
@@ -1889,6 +1911,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             userLocation = viewModel.userLocation,
                             centerOnUserRequested = viewModel.centerOnUserRequested,
                             onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                            onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
                             onRouteSelected = { index -> 
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             },
@@ -2047,6 +2070,7 @@ fun MapPreview(
     centerOnUserRequested: Boolean = false,
     onCenterOnUserHandled: () -> Unit = {},
     onRouteSelected: (Int) -> Unit,
+    onUserPositionSelected: () -> Unit = {},
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
@@ -2157,11 +2181,14 @@ fun MapPreview(
                             opacity: 1,
                             fillColor: '#3880ff',
                             fillOpacity: 1,
-                            interactive: false
+                            interactive: true
                         }).addTo(map);
+                        userMarker.on('click', function() {
+                            if (window.Android) window.Android.selectUserPosition();
+                        });
                         userMarker.bringToFront();
                         if (center) {
-                            map.setView([lat, lng], 15);
+                            map.panTo([lat, lng]);
                         }
                     }
                 };
@@ -2301,6 +2328,9 @@ fun MapPreview(
 
                     @android.webkit.JavascriptInterface
                     fun selectPoint(routeIdx: Int, pointIdx: Int) { onPointSelected(routeIdx, pointIdx) }
+
+                    @android.webkit.JavascriptInterface
+                    fun selectUserPosition() { onUserPositionSelected() }
                 }, "Android")
                 webViewClient = WebViewClient()
                 setOnTouchListener { v, event ->
