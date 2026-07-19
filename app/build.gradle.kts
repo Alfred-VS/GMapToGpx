@@ -12,7 +12,9 @@ android {
         applicationId = "ch.tscsoft.gmaptogpx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        // Generiert einen versionCode basierend auf den Minuten seit dem 01.01.2024
+        // Dies stellt sicher, dass der Wert bei jedem Build steigt und im Integer-Bereich bleibt.
+        versionCode = ((System.currentTimeMillis() - 1704067200000L) / 60000L).toInt()
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -31,6 +33,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

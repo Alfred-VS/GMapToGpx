@@ -991,7 +991,7 @@ fun AboutAppText() {
         Text("Sie extrahiert die Wegpunkte aus Google Maps Links und berechnet mithilfe der BRouter-Engine eine optimierte, fahrradtaugliche Route.", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(8.dp))
         Text("© by Fredi Tschumi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Version 1.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
