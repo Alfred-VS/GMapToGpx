@@ -1147,11 +1147,11 @@ fun HaftungText() {
 private fun getSurfaceColor(surface: String): Color {
     return when (surface.lowercase()) {
         "asphalt", "paved", "concrete" -> Color(0xFF666666)
-        "gravel", "fine_gravel", "compacted", "dirt", "ground", "unpaved" -> Color(0xFFC2B280)
-        "paving_stones", "sett", "cobblestone" -> Color(0xFF999999)
+        "gravel", "fine_gravel", "compacted", "dirt", "ground", "unpaved", "schotter" -> Color(0xFFC2B280)
+        "paving_stones", "sett", "cobblestone", "pflaster" -> Color(0xFF999999)
         "sand" -> Color(0xFFEDC9AF)
-        "unbekannt" -> Color(0xFFBBBBBB)
-        else -> Color(0xFFBBBBBB)
+        "unbekannt" -> Color(0xFF2196F3)
+        else -> Color(0xFF2196F3)
     }
 }
 
