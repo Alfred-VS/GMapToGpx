@@ -1901,6 +1901,7 @@ fun MapPreview(
                         interactive: false
                     }).addTo(map);
                     highlightMarker.bringToFront();
+                    map.panTo(pos);
                 }
 
                 routesData.forEach(function(route, index) {
