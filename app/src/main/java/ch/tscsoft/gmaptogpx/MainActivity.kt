@@ -13,6 +13,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,6 +54,15 @@ import kotlinx.serialization.json.*
 
 private val jsonParser = Json { ignoreUnknownKeys = true }
 
+data class RouteSegment(
+    val surface: String,
+    val highway: String,
+    val gradient: Double, // in %
+    val distance: Double, // in meters
+    val startIndex: Int,
+    val endIndex: Int
+)
+
 data class RouteOption(
     val title: String,
     val points: List<Pair<Double, Double>>,
@@ -65,7 +75,9 @@ data class RouteOption(
     val distanceMeters: Double = 0.0,
     val elevationGain: Int = 0,
     val elevationLoss: Int = 0,
-    val totalTimeSeconds: Int = 0
+    val totalTimeSeconds: Int = 0,
+    val segments: List<RouteSegment> = emptyList(),
+    val surfaceSummary: Map<String, Double> = emptyMap()
 )
 
 data class BRouterResult(
@@ -75,7 +87,8 @@ data class BRouterResult(
     val distance: Double = 0.0,
     val elevationGain: Int = 0,
     val elevationLoss: Int = 0,
-    val totalTimeSeconds: Int = 0
+    val totalTimeSeconds: Int = 0,
+    val segments: List<RouteSegment> = emptyList()
 )
 
 class MapViewModel : ViewModel() {
@@ -90,7 +103,7 @@ class MapViewModel : ViewModel() {
     var debugUrl by mutableStateOf<String?>(null)
         private set
     var bikeProfile by mutableStateOf("fastbike")
-    var autoAltCount by mutableStateOf(0)
+    var autoAltCount by mutableIntStateOf(0)
     
     // Colors (Store as #AARRGGBB)
     var colorMain by mutableStateOf("#FF0000FF")
@@ -243,7 +256,7 @@ class MapViewModel : ViewModel() {
                         
                         status = "Lade BRouter Route ($profileName)..."
                         val result = getBikeRoute(points, effectiveProfile, 0)
-                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds))
+                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds, segments = result.segments, surfaceSummary = createSurfaceSummary(result.segments)))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
@@ -252,7 +265,7 @@ class MapViewModel : ViewModel() {
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
                         
-                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds))
+                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds, segments = mainResult.segments, surfaceSummary = createSurfaceSummary(mainResult.segments)))
                         
                         // Fetch Alternatives according to setting
                         for (i in 1..autoAltCount) {
@@ -261,7 +274,7 @@ class MapViewModel : ViewModel() {
                             val altRoute = altResult.points
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                             }
                         }
                     }
@@ -340,8 +353,9 @@ class MapViewModel : ViewModel() {
             val json = jsonParser.parseToJsonElement(responseText).jsonObject
 
             val features = json["features"]?.jsonArray
-            if (features != null && features.isNotEmpty()) {
-                val properties = features[0].jsonObject["properties"]?.jsonObject
+            if (features != null && !features.isEmpty()) {
+                val feature = features[0].jsonObject
+                val properties = feature["properties"]?.jsonObject
                 
                 // Extrahiere Distanz robust
                 val distStr = properties?.get("track-length")?.jsonPrimitive?.content
@@ -364,8 +378,12 @@ class MapViewModel : ViewModel() {
                              ?: properties?.get("time")?.jsonPrimitive?.content
                 val totalTimeSeconds = timeStr?.toDoubleOrNull()?.toInt() ?: 0
 
-                val geometry = features[0].jsonObject["geometry"]?.jsonObject
+                val geometry = feature["geometry"]?.jsonObject
                 val coordinates = geometry?.get("coordinates")?.jsonArray
+                
+                // Parsing messages for surface and highway
+                val messages = properties?.get("messages")?.jsonArray
+                val resSegments = mutableListOf<RouteSegment>()
                 
                 if (coordinates != null && coordinates.size >= 2) {
                     val resPoints = mutableListOf<Pair<Double, Double>>()
@@ -390,6 +408,58 @@ class MapViewModel : ViewModel() {
                         lastP = lat to lon
                     }
 
+                    // Parse segments from messages
+                    if (messages != null && messages.size > 1) {
+                        var lastSurface = ""
+                        var lastHighway = ""
+                        var segmentDist = 0.0
+                        var startAlt = 0.0
+                        var startIndex = 0
+
+                        for (i in 1 until messages.size) {
+                            val msg = messages[i].jsonArray
+                            if (msg.size < 10) continue
+                            
+                            val lat = msg[1].jsonPrimitive.content.toDoubleOrNull() ?: 0.0
+                            val lon = msg[0].jsonPrimitive.content.toDoubleOrNull() ?: 0.0
+                            val p = (lat / 1000000.0) to (lon / 1000000.0)
+                            
+                            val alt = msg[2].jsonPrimitive.content.toDoubleOrNull() ?: 0.0
+                            val d = msg[3].jsonPrimitive.content.toDoubleOrNull() ?: 0.0
+                            val tags = msg[9].jsonPrimitive.content
+                            
+                            val surface = "surface=(\\S+)".toRegex().find(tags)?.groupValues?.get(1) ?: "unbekannt"
+                            val highway = "highway=(\\S+)".toRegex().find(tags)?.groupValues?.get(1) ?: "unbekannt"
+                            
+                            // Find corresponding index in resPoints
+                            val currentIndex = resPoints.indices.minByOrNull { idx ->
+                                val rp = resPoints[idx]
+                                Math.pow(rp.first - p.first, 2.0) + Math.pow(rp.second - p.second, 2.0)
+                            } ?: 0
+
+                            if (i == 1) {
+                                lastSurface = surface
+                                lastHighway = highway
+                                startAlt = alt
+                                startIndex = currentIndex
+                            } else if (surface != lastSurface || highway != lastHighway || i == messages.size - 1) {
+                                val endIndex = currentIndex
+                                val elevDiff = alt - startAlt
+                                val gradient = if (segmentDist > 0) (elevDiff / segmentDist) * 100.0 else 0.0
+                                
+                                resSegments.add(RouteSegment(lastSurface, lastHighway, gradient, segmentDist, startIndex, endIndex))
+                                
+                                lastSurface = surface
+                                lastHighway = highway
+                                segmentDist = d
+                                startAlt = alt
+                                startIndex = endIndex
+                            } else {
+                                segmentDist += d
+                            }
+                        }
+                    }
+
                     // Fallback: Manuelle Berechnung NUR wenn BRouter keine Daten lieferte (filteredGain == 0)
                     if (elevGain <= 0) {
                         var calcGain = 0.0
@@ -408,12 +478,35 @@ class MapViewModel : ViewModel() {
                         elevLoss = calcLoss.toInt()
                     }
 
-                    return@withContext BRouterResult(resPoints, resAlts, resDists, dist, elevGain, elevLoss, totalTimeSeconds)
+                    return@withContext BRouterResult(resPoints, resAlts, resDists, dist, elevGain, elevLoss, totalTimeSeconds, resSegments)
                 }
             }
         } catch (e: Exception) {
+            e.printStackTrace()
         }
         BRouterResult(points)
+    }
+
+    private fun createSurfaceSummary(segments: List<RouteSegment>): Map<String, Double> {
+        val summary = mutableMapOf<String, Double>()
+        var totalDist = 0.0
+        segments.forEach { seg ->
+            val label = when (seg.surface) {
+                "asphalt", "paved", "concrete" -> "Asphalt"
+                "gravel", "fine_gravel", "compacted", "dirt", "ground", "unpaved" -> "Schotter"
+                "paving_stones", "sett", "cobblestone" -> "Pflaster"
+                "sand" -> "Sand"
+                "unbekannt" -> "Unbekannt"
+                else -> seg.surface.replaceFirstChar { it.uppercase() }
+            }
+            summary[label] = (summary[label] ?: 0.0) + seg.distance
+            totalDist += seg.distance
+        }
+        return if (totalDist > 0) {
+            summary.mapValues { it.value / totalDist }
+        } else {
+            emptyMap()
+        }
     }
 
     fun fetchAlternatives() {
@@ -435,7 +528,7 @@ class MapViewModel : ViewModel() {
                     val altRoute = altResult.points
                     
                     if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
-                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds))
+                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                     }
                 }
                 routeOptions = currentOptions
@@ -482,7 +575,7 @@ class MapViewModel : ViewModel() {
     }
 
     private fun extractUrl(text: String): String? {
-        val regex = "(https?://[^\\s]+)".toRegex()
+        val regex = "(https?://\\S+)".toRegex()
         return regex.find(text)?.value
     }
 
@@ -617,10 +710,8 @@ class MapViewModel : ViewModel() {
         cameraPoint?.let { cp ->
             val cpLat = cp.first
             val cpLon = cp.second
-            if (cpLat != null && cpLon != null) {
-                sortedPoints.removeAll { 
-                    Math.abs(it.first - cpLat) < 0.0001 && Math.abs(it.second - cpLon) < 0.0001
-                }
+            sortedPoints.removeAll { 
+                Math.abs(it.first - cpLat) < 0.0001 && Math.abs(it.second - cpLon) < 0.0001
             }
         }
 
@@ -765,7 +856,7 @@ fun MainTopAppBar(viewModel: MapViewModel) {
 
                     DropdownMenuItem(
                         text = { Text("Hilfe") },
-                        leadingIcon = { Icon(Icons.Default.Help, null) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Help, null) },
                         onClick = {
                             showInfoDialog = true
                             showMenu = false
@@ -827,7 +918,6 @@ fun ColorConfigDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
-                //Text("Einstellungen", style = MaterialTheme.typography.labelLarge)
                 ColorRow("Hauptroute", viewModel.colorMain) { viewModel.updateColor("main", it) }
                 ColorRow("Alternative 1", viewModel.colorAlt1) { viewModel.updateColor("alt1", it) }
                 ColorRow("Alternative 2", viewModel.colorAlt2) { viewModel.updateColor("alt2", it) }
@@ -838,7 +928,7 @@ fun ColorConfigDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fertig") } },
         dismissButton = {
             IconButton(onClick = { viewModel.resetColors() }) {
-                Icon(Icons.Default.Refresh, contentDescription = "Zurücksetzen")//, tint = MaterialTheme.colorScheme.error)
+                Icon(Icons.Default.Refresh, contentDescription = "Zurücksetzen")
             }
         }
     )
@@ -855,7 +945,6 @@ fun ColorRow(label: String, currentHex: String, onColorSelected: (String) -> Uni
     )
     var expanded by remember { mutableStateOf(false) }
 
-    // Parse current ARGB hex
     val currentColor = Color(android.graphics.Color.parseColor(currentHex))
     val alphaValue = currentColor.alpha
 
@@ -884,7 +973,6 @@ fun ColorRow(label: String, currentHex: String, onColorSelected: (String) -> Uni
                                     .size(32.dp)
                                     .background(Color(android.graphics.Color.parseColor(hex)), MaterialTheme.shapes.small)
                                     .clickable {
-                                        // Update color but keep current alpha
                                         val newColor = android.graphics.Color.parseColor(hex)
                                         val alpha = (alphaValue * 255).toInt()
                                         val argb = (alpha shl 24) or (newColor and 0x00FFFFFF)
@@ -924,7 +1012,6 @@ fun AppInfoDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        //title = { Text("Hilfe") },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
                 TabRow(selectedTabIndex = selectedTab) {
@@ -953,7 +1040,7 @@ fun AppInfoDialog(onDismiss: () -> Unit) {
 @Composable
 fun LegalDialog(onDismiss: () -> Unit) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf( "Datenschutz", "Haftung") //"Impressum",
+    val tabs = listOf( "Datenschutz", "Haftung")
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -972,7 +1059,6 @@ fun LegalDialog(onDismiss: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     when (selectedTab) {
-                        //0 -> ImpressumText()
                         0-> DatenschutzText()
                         1 -> HaftungText()
                     }
@@ -1028,14 +1114,6 @@ fun HowToText() {
 fun ImpressumText() {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("© by Fredi Tschumi", style = MaterialTheme.typography.labelLarge)
-        /*Text("Angaben gemäß § 5 TMG:", style = MaterialTheme.typography.labelLarge)
-        Text("[Dein Name/Unternehmen]\n[Deine Straße Hausnummer]\n[PLZ Ort]", style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(8.dp))
-        Text("Kontakt:", style = MaterialTheme.typography.labelLarge)
-        Text("Telefon: [Deine Telefonnummer]\nE-Mail: [Deine E-Mail-Adresse]", style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(8.dp))
-        Text("Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:", style = MaterialTheme.typography.labelLarge)
-        Text("[Dein Name]\n[Deine Adresse]", style = MaterialTheme.typography.bodySmall)*/
     }
 }
 
@@ -1066,14 +1144,26 @@ fun HaftungText() {
     }
 }
 
+private fun getSurfaceColor(surface: String): Color {
+    return when (surface.lowercase()) {
+        "asphalt", "paved", "concrete" -> Color(0xFF666666)
+        "gravel", "fine_gravel", "compacted", "dirt", "ground", "unpaved" -> Color(0xFFC2B280)
+        "paving_stones", "sett", "cobblestone" -> Color(0xFF999999)
+        "sand" -> Color(0xFFEDC9AF)
+        "unbekannt" -> Color(0xFFBBBBBB)
+        else -> Color(0xFFBBBBBB)
+    }
+}
+
 @Composable
 fun ElevationChart(
-    altitudes: List<Double>,
-    distances: List<Double>,
+    option: RouteOption,
+    modifier: Modifier = Modifier,
     highlightedIndex: Int? = null,
-    onPointHighlighted: (Int?) -> Unit = {},
-    modifier: Modifier = Modifier
+    onPointHighlighted: (Int?) -> Unit = {}
 ) {
+    val altitudes = option.altitudes
+    val distances = option.distances
     if (altitudes.isEmpty() || altitudes.size != distances.size) return
 
     val minAlt = (altitudes.minOrNull() ?: 0.0)
@@ -1081,7 +1171,6 @@ fun ElevationChart(
     val totalDist = distances.lastOrNull() ?: 1.0
     val altRange = (maxAlt - minAlt).coerceAtLeast(10.0)
 
-    val color = MaterialTheme.colorScheme.primary
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val highlightColor = MaterialTheme.colorScheme.error
 
@@ -1114,7 +1203,7 @@ fun ElevationChart(
                             val index = findNearestIndex(offset.x, size.width, distances)
                             onPointHighlighted(index)
                         },
-                        onDragEnd = { /* keep highlight or clear? keep for now */ },
+                        onDragEnd = { },
                         onDragCancel = { },
                         onDrag = { change, _ ->
                             val index = findNearestIndex(change.position.x, size.width, distances)
@@ -1126,32 +1215,61 @@ fun ElevationChart(
             val width = size.width
             val height = size.height
 
-            val path = Path()
-            val fillPath = Path()
+            if (option.segments.isNotEmpty()) {
+                option.segments.forEach { seg ->
+                    val segPath = Path()
+                    val segFillPath = Path()
+                    val segColor = getSurfaceColor(seg.surface)
 
-            distances.forEachIndexed { i, d ->
-                val x = (d / totalDist * width).toFloat()
-                val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
+                    for (i in seg.startIndex..seg.endIndex) {
+                        if (i >= distances.size) break
+                        val x = (distances[i] / totalDist * width).toFloat()
+                        val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
 
-                if (i == 0) {
-                    path.moveTo(x, y)
-                    fillPath.moveTo(x, height)
-                    fillPath.lineTo(x, y)
-                } else {
-                    path.lineTo(x, y)
-                    fillPath.lineTo(x, y)
+                        if (i == seg.startIndex) {
+                            segPath.moveTo(x, y)
+                            segFillPath.moveTo(x, height)
+                            segFillPath.lineTo(x, y)
+                        } else {
+                            segPath.lineTo(x, y)
+                            segFillPath.lineTo(x, y)
+                        }
+                    }
+                    val lastIdx = Math.min(seg.endIndex, distances.size - 1)
+                    val lastX = (distances[lastIdx] / totalDist * width).toFloat()
+                    segFillPath.lineTo(lastX, height)
+                    segFillPath.close()
+
+                    drawPath(segFillPath, color = segColor.copy(alpha = 0.3f))
+                    drawPath(segPath, color = segColor, style = Stroke(width = 2.dp.toPx()))
                 }
+            } else {
+                val path = Path()
+                val fillPath = Path()
+                val color = Color(0xFF2196F3)
 
-                if (i == distances.size - 1) {
-                    fillPath.lineTo(x, height)
-                    fillPath.close()
+                distances.forEachIndexed { i, d ->
+                    val x = (d / totalDist * width).toFloat()
+                    val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
+
+                    if (i == 0) {
+                        path.moveTo(x, y)
+                        fillPath.moveTo(x, height)
+                        fillPath.lineTo(x, y)
+                    } else {
+                        path.lineTo(x, y)
+                        fillPath.lineTo(x, y)
+                    }
+
+                    if (i == distances.size - 1) {
+                        fillPath.lineTo(x, height)
+                        fillPath.close()
+                    }
                 }
+                drawPath(fillPath, color = color.copy(alpha = 0.2f))
+                drawPath(path, color = color, style = Stroke(width = 2.dp.toPx()))
             }
 
-            drawPath(fillPath, color = color.copy(alpha = 0.2f))
-            drawPath(path, color = color, style = Stroke(width = 2.dp.toPx()))
-
-            // Draw highlight
             if (highlightedIndex != null && highlightedIndex in distances.indices) {
                 val hX = (distances[highlightedIndex] / totalDist * width).toFloat()
                 val hY = (height - ((altitudes[highlightedIndex] - minAlt) / altRange * height)).toFloat()
@@ -1186,6 +1304,34 @@ fun ElevationChart(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (highlightedIndex != null) highlightColor else labelColor
             )
+        }
+
+        if (option.surfaceSummary.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                option.surfaceSummary.forEach { (label, ratio) ->
+                    if (ratio > 0.05) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(getSurfaceColor(label))
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "$label ${(ratio * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1237,24 +1383,28 @@ fun RouteDetailDialog(
                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                     style = MaterialTheme.typography.bodySmall)
 
+                val isSteep = option.segments.any { it.gradient > 15.0 }
+                if (isSteep) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Achtung: Sehr steile Abschnitte (>15%)", color = Color.Red, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
                 if (option.altitudes.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
                     ElevationChart(
-                        altitudes = option.altitudes,
-                        distances = option.distances,
+                        option = option,
                         modifier = Modifier.fillMaxWidth().height(150.dp)
                     )
                 }
             }
         },
-        confirmButton = {
-            //TextButton(onClick = onDismiss) { Text("Schließen") }
-            //TextButton(onClick = onEdit) { Text("Edit") }
-        },
+        confirmButton = {},
         dismissButton = {
             Row (horizontalArrangement = Arrangement.spacedBy(8.dp)){
-                //TextButton(onClick = onEdit) { Text("Edit") }
-                //TextButton(onClick = onShare) { Text("Teilen") }
                 OutlinedButton(
                     onClick = onEdit,
                     modifier = Modifier.weight(1f),
@@ -1310,7 +1460,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val totalHeight = maxHeight
-        val fixedElementsHeight = 240.dp // Estimated height of text, buttons, and padding
+        val fixedElementsHeight = 240.dp
         val minMapHeight = 200.dp
         val minChartHeight = 80.dp
         
@@ -1318,7 +1468,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         
         val (mapHeight, chartHeight) = if (availableDynamicSpace > (minMapHeight + minChartHeight)) {
             val excess = availableDynamicSpace - (minMapHeight + minChartHeight)
-            // Distribute excess space: Give chart up to 35% of excess (capped at 200.dp), map takes the rest
             val cH = (minChartHeight + excess * 0.35f).coerceAtMost(200.dp)
             val mH = availableDynamicSpace - cH
             mH to cH
@@ -1404,7 +1553,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Profile Dropdown and Refresh Button on Main Page
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
@@ -1553,10 +1701,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                                 if (option.altitudes.isNotEmpty()) {
                                     Spacer(Modifier.height(12.dp))
-                                    //Text("Höhenprofil", style = MaterialTheme.typography.labelSmall)
                                     ElevationChart(
-                                        altitudes = option.altitudes,
-                                        distances = option.distances,
+                                        option = option,
                                         highlightedIndex = if (viewModel.highlightedRouteIndex == page) viewModel.highlightedPointIndex else null,
                                         onPointHighlighted = { idx -> viewModel.setHighlight(page, idx) },
                                         modifier = Modifier.fillMaxWidth().height(chartHeight).padding(top = 4.dp)
@@ -1635,12 +1781,11 @@ fun MapPreview(
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    // Only reload the full HTML if routes or colors or mapType change
     val htmlContent = remember(options, visibleRoutes, currentProfile, colors, mapType) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
-
+            
             val argbHex = when {
                 opt.isOriginal -> colors[4]
                 opt.title == "Hauptroute" -> colors[0]
@@ -1660,7 +1805,7 @@ fun MapPreview(
                 val m = (opt.totalTimeSeconds % 3600) / 60
                 if (h > 0) "${h}h ${m}min" else "${m}min"
             } else ""
-            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords],"isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
+            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords], "isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
         """
@@ -1711,7 +1856,7 @@ fun MapPreview(
                 function highlightRoute(selectedIndex) {
                     routeLayers.forEach(function(layer, index) {
                         var route = routesData[index];
-                        if (!route.isVisible) return;
+                        if (!route.isVisible || !layer) return;
                         var isSelected = (index === selectedIndex);
                         
                         layer.setStyle({
@@ -1725,7 +1870,6 @@ fun MapPreview(
                             var textColor = isLight(route.color) ? 'black' : 'white';
                             var opacity = isSelected ? 1.0 : (route.opacity * 0.8);
                             var labelText = route.km;
-                            //if (route.time) labelText += " " + route.time ;
                             if (route.isOriginal) labelText = "G: " + labelText;
                             
                             var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + (isSelected ? 'black' : route.color) + '; border-width:' + (isSelected ? '2px' : '1px') + '; color:' + textColor + '; opacity:' + opacity + ';">' + labelText + '</div>';
@@ -1765,6 +1909,7 @@ fun MapPreview(
                         labelLayers.push(null);
                         return;
                     }
+
                     var polyline = L.polyline(route.points, { 
                         color: route.color, 
                         opacity: route.opacity * 0.7,
@@ -1795,7 +1940,6 @@ fun MapPreview(
                         var pos = route.points[targetIdx];
                         var textColor = isLight(route.color) ? 'black' : 'white';
                         var labelText = route.km;
-                        if (route.time) labelText += " " + route.time ;
                         if (route.isOriginal) labelText = "G: " + labelText;
                         
                         var content = '<div class="label-inner" style="background:' + route.color + '; border-color:' + route.color + '; color:' + textColor + '; opacity:' + (route.opacity * 0.8) + ';">' + labelText + '</div>';
@@ -1847,11 +1991,9 @@ fun MapPreview(
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 webView.tag = htmlContent
             } else {
-                // If only selectedRouteIndex changed, use JS to update
                 webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
                 webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
             }
         }
     )
 }
-
