@@ -1,12 +1,16 @@
 package ch.tscsoft.gmaptogpx
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -24,6 +28,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -42,6 +47,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.geometry.Offset
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -124,6 +131,24 @@ class MapViewModel : ViewModel() {
 
     var highlightedPointIndex by mutableStateOf<Int?>(null)
     var highlightedRouteIndex by mutableStateOf<Int?>(null)
+
+    var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
+    var centerOnUserRequested by mutableStateOf(false)
+
+    fun updateLocation(context: android.content.Context, centerOnUser: Boolean = false) {
+        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                .addOnSuccessListener { location ->
+                    if (location != null) {
+                        userLocation = location.latitude to location.longitude
+                        if (centerOnUser) {
+                            centerOnUserRequested = true
+                        }
+                    }
+                }
+        }
+    }
 
     fun initPrefs(context: android.content.Context) {
         if (prefs == null) {
@@ -1662,6 +1687,27 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.any { it }) {
+            viewModel.updateLocation(context, centerOnUser = true)
+        }
+    }
+
+    fun onMyLocationClick() {
+        val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarseLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (fineLocation == PackageManager.PERMISSION_GRANTED || coarseLocation == PackageManager.PERMISSION_GRANTED) {
+            viewModel.updateLocation(context, centerOnUser = true)
+        } else {
+            permissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        }
+    }
+
     LaunchedEffect(pagerState.currentPage) {
         if (viewModel.highlightedRouteIndex != pagerState.currentPage) {
             viewModel.setHighlight(null, null)
@@ -1726,6 +1772,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     selectedRouteIndex = pagerState.currentPage,
                     highlightedRouteIndex = viewModel.highlightedRouteIndex,
                     highlightedPointIndex = viewModel.highlightedPointIndex,
+                    userLocation = viewModel.userLocation,
+                    centerOnUserRequested = viewModel.centerOnUserRequested,
+                    onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
                     onRouteSelected = { index -> 
                         val option = viewModel.routeOptions.getOrNull(index)
                         if (option != null) {
@@ -1751,6 +1800,13 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     ) {
                         Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
                     }
+                }
+                SmallFloatingActionButton(
+                    onClick = { onMyLocationClick() },
+                    modifier = Modifier.padding(16.dp).align(Alignment.BottomEnd),
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
                 }
             }
         } else {
@@ -1830,6 +1886,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             selectedRouteIndex = pagerState.currentPage,
                             highlightedRouteIndex = viewModel.highlightedRouteIndex,
                             highlightedPointIndex = viewModel.highlightedPointIndex,
+                            userLocation = viewModel.userLocation,
+                            centerOnUserRequested = viewModel.centerOnUserRequested,
+                            onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
                             onRouteSelected = { index -> 
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             },
@@ -1851,6 +1910,13 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             ) {
                                 Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
                             }
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { onMyLocationClick() },
+                            modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1977,6 +2043,9 @@ fun MapPreview(
     selectedRouteIndex: Int = -1,
     highlightedRouteIndex: Int? = null,
     highlightedPointIndex: Int? = null,
+    userLocation: Pair<Double, Double>? = null,
+    centerOnUserRequested: Boolean = false,
+    onCenterOnUserHandled: () -> Unit = {},
     onRouteSelected: (Int) -> Unit,
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
@@ -2072,8 +2141,30 @@ fun MapPreview(
                 var routeLayers = [];
                 var labelLayers = [];
                 var highlightMarker = null;
+                var userMarker = null;
                 var group = new L.featureGroup();
                 L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+
+                window.setUserLocation = function(lat, lng, center) {
+                    if (userMarker) {
+                        map.removeLayer(userMarker);
+                    }
+                    if (lat !== null && lng !== null) {
+                        userMarker = L.circleMarker([lat, lng], {
+                            radius: 7,
+                            color: 'white',
+                            weight: 2,
+                            opacity: 1,
+                            fillColor: '#3880ff',
+                            fillOpacity: 1,
+                            interactive: false
+                        }).addTo(map);
+                        userMarker.bringToFront();
+                        if (center) {
+                            map.setView([lat, lng], 15);
+                        }
+                    }
+                };
 
                 function isLight(color) {
                     var r, g, b, hsp;
@@ -2226,6 +2317,13 @@ fun MapPreview(
                 webView.evaluateJavascript("setMapType('$mapType')", null)
                 webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
                 webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
+                
+                val lat = userLocation?.first
+                val lng = userLocation?.second
+                webView.evaluateJavascript("setUserLocation(${lat ?: "null"}, ${lng ?: "null"}, $centerOnUserRequested)", null)
+                if (centerOnUserRequested) {
+                    onCenterOnUserHandled()
+                }
             }
         }
     )
