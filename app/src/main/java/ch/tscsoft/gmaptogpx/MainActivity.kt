@@ -1366,12 +1366,51 @@ fun ElevationChart(
             altitudes[highlightedIndex]
         } else maxAlt
 
-        Text(
-            "${currentAlt.toInt()} m",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (highlightedIndex != null) highlightColor else labelColor,
-            modifier = Modifier.padding(bottom = 2.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "${currentAlt.toInt()} m",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (highlightedIndex != null) highlightColor else labelColor
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = {
+                        zoomX = (zoomX / 1.5f).coerceAtLeast(1f)
+                        val maxOffset = (chartWidth * (zoomX - 1f))
+                        offsetX = offsetX.coerceAtMost(maxOffset)
+                    },
+                    modifier = Modifier
+                        .size(16.dp),
+                    enabled = zoomX > 1f
+                ) {
+                    Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", modifier = Modifier.size(24.dp))
+                }
+
+                Text(
+                    "${String.format(Locale.US, "%.1f", zoomX)}x",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = labelColor,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+
+                IconButton(
+                    onClick = {
+                        zoomX = (zoomX * 1.5f).coerceAtMost(10f)
+                    },
+                    modifier = Modifier
+                        .size(16.dp)
+                        ,
+                    enabled = zoomX < 10f
+                ) {
+                    Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", modifier = Modifier.size(24.dp))
+                }
+            }
+        }
 
         Canvas(
             modifier = Modifier
