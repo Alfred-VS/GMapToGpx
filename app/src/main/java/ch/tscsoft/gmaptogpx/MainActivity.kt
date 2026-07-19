@@ -293,6 +293,100 @@ class MapViewModel : ViewModel() {
         }
     }
 
+    fun processSharedUri(uri: Uri, context: android.content.Context) {
+        initPrefs(context)
+        isProcessing = true
+        status = "Lade GPX Datei..."
+        routeOptions = emptyList()
+
+        viewModelScope.launch {
+            try {
+                val gpxContent = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }
+
+                if (gpxContent != null) {
+                    val points = mutableListOf<Pair<Double, Double>>()
+                    val alts = mutableListOf<Double>()
+                    
+                    // Simple GPX Parsing using Regex (as we don't have a full XML parser library dependency)
+                    // Matches <trkpt lat="..." lon="..."> and optional <ele>...</ele>
+                    val trkptRegex = """<trkpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
+                    trkptRegex.findAll(gpxContent).forEach { match ->
+                        val lat = match.groupValues[1].toDoubleOrNull()
+                        val lon = match.groupValues[2].toDoubleOrNull()
+                        val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
+                        if (lat != null && lon != null) {
+                            points.add(lat to lon)
+                            alts.add(ele)
+                        }
+                    }
+
+                    // Fallback to waypoints if no trackpoints found
+                    if (points.isEmpty()) {
+                        val wptRegex = """<wpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
+                        wptRegex.findAll(gpxContent).forEach { match ->
+                            val lat = match.groupValues[1].toDoubleOrNull()
+                            val lon = match.groupValues[2].toDoubleOrNull()
+                            val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
+                            if (lat != null && lon != null) {
+                                points.add(lat to lon)
+                                alts.add(ele)
+                            }
+                        }
+                    }
+
+                    if (points.isNotEmpty()) {
+                        lastPoints = points
+                        val dist = calculateDistance(points)
+                        
+                        // Elevation Gain/Loss calculation
+                        var gain = 0.0
+                        var loss = 0.0
+                        for (i in 1 until alts.size) {
+                            val diff = alts[i] - alts[i-1]
+                            if (diff > 0.5) gain += diff
+                            else if (diff < -0.5) loss += -diff
+                        }
+
+                        val distances = mutableListOf<Double>()
+                        var currentD = 0.0
+                        distances.add(0.0)
+                        for (i in 1 until points.size) {
+                            currentD += calculateDistanceBetween(points[i-1].first, points[i-1].second, points[i].first, points[i].second)
+                            distances.add(currentD)
+                        }
+
+                        val option = RouteOption(
+                            title = "Importierte GPX",
+                            points = points,
+                            altitudes = alts,
+                            distances = distances,
+                            gpxContent = gpxContent,
+                            isOriginal = true,
+                            inputPoints = points,
+                            distanceMeters = dist,
+                            elevationGain = gain.toInt(),
+                            elevationLoss = loss.toInt()
+                        )
+                        routeOptions = listOf(option)
+                        visibleRoutes = setOf(0)
+                        status = "GPX geladen!"
+                        lastSharedText = null // Reset last shared text
+                    } else {
+                        status = "Keine Wegpunkte in GPX gefunden."
+                    }
+                } else {
+                    status = "Datei konnte nicht gelesen werden."
+                }
+            } catch (e: Exception) {
+                status = "Fehler: ${e.localizedMessage ?: e.message}"
+            } finally {
+                isProcessing = false
+            }
+        }
+    }
+
     private fun getProfileLabel(id: String) = when(id) {
         "fastbike" -> "Rennrad"
         "mtb" -> "Mountainbike"
@@ -771,9 +865,25 @@ class MainActivity : ComponentActivity() {
             
             // Handle incoming intent
             LaunchedEffect(intent) {
-                if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
-                    intent.getStringExtra(Intent.EXTRA_TEXT)?.let {
-                        viewModel.processSharedText(it, context)
+                when {
+                    intent?.action == Intent.ACTION_SEND && intent.type == "text/plain" -> {
+                        intent.getStringExtra(Intent.EXTRA_TEXT)?.let {
+                            viewModel.processSharedText(it, context)
+                        }
+                    }
+                    (intent?.action == Intent.ACTION_VIEW || intent?.action == Intent.ACTION_SEND) && 
+                    (intent.type?.contains("gpx") == true || intent.data?.path?.endsWith(".gpx") == true || intent.type == "application/octet-stream") -> {
+                        val uri = if (intent.action == Intent.ACTION_SEND) {
+                            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                            }
+                        } else {
+                            intent.data
+                        }
+                        uri?.let { viewModel.processSharedUri(it, context) }
                     }
                 }
             }
