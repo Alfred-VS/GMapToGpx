@@ -32,11 +32,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.geometry.Offset
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
 import kotlinx.coroutines.Dispatchers
@@ -1284,6 +1287,24 @@ fun ElevationChart(
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val highlightColor = MaterialTheme.colorScheme.error
 
+    var zoomX by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var chartWidth by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(highlightedIndex, zoomX, chartWidth) {
+        if (highlightedIndex != null && chartWidth > 0 && zoomX > 1f) {
+            val width = chartWidth.toFloat()
+            val hX = (distances[highlightedIndex] / totalDist * width * zoomX).toFloat()
+            val margin = 50f // pixels margin
+            
+            if (hX < offsetX + margin) {
+                offsetX = (hX - margin).coerceIn(0f, width * (zoomX - 1f))
+            } else if (hX > offsetX + width - margin) {
+                offsetX = (hX - width + margin).coerceIn(0f, width * (zoomX - 1f))
+            }
+        }
+    }
+
     Column(modifier = modifier) {
         val currentAlt = if (highlightedIndex != null && highlightedIndex in altitudes.indices) {
             altitudes[highlightedIndex]
@@ -1300,23 +1321,38 @@ fun ElevationChart(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .clipToBounds()
+                .onSizeChanged { chartWidth = it.width }
                 .pointerInput(distances) {
-                    detectTapGestures { offset ->
-                        val x = offset.x
-                        val index = findNearestIndex(x, size.width, distances)
-                        onPointHighlighted(index)
+                    detectTapGestures(
+                        onDoubleTap = {
+                            zoomX = 1f
+                            offsetX = 0f
+                        },
+                        onTap = { offset ->
+                            val index = findNearestIndex(offset.x, size.width, distances, zoomX, offsetX)
+                            onPointHighlighted(index)
+                        }
+                    )
+                }
+                .pointerInput(distances) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        zoomX = (zoomX * zoom).coerceIn(1f, 10f)
+                        val maxOffset = (size.width * (zoomX - 1f))
+                        offsetX = (offsetX - pan.x).coerceIn(0f, maxOffset)
                     }
                 }
                 .pointerInput(distances) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            val index = findNearestIndex(offset.x, size.width, distances)
+                            val index = findNearestIndex(offset.x, size.width, distances, zoomX, offsetX)
                             onPointHighlighted(index)
                         },
                         onDragEnd = { },
                         onDragCancel = { },
                         onDrag = { change, _ ->
-                            val index = findNearestIndex(change.position.x, size.width, distances)
+                            val x = change.position.x
+                            val index = findNearestIndex(x, size.width, distances, zoomX, offsetX)
                             onPointHighlighted(index)
                         }
                     )
@@ -1333,7 +1369,7 @@ fun ElevationChart(
 
                     for (i in seg.startIndex..seg.endIndex) {
                         if (i >= distances.size) break
-                        val x = (distances[i] / totalDist * width).toFloat()
+                        val x = ((distances[i] / totalDist * width * zoomX) - offsetX).toFloat()
                         val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
 
                         if (i == seg.startIndex) {
@@ -1346,7 +1382,7 @@ fun ElevationChart(
                         }
                     }
                     val lastIdx = Math.min(seg.endIndex, distances.size - 1)
-                    val lastX = (distances[lastIdx] / totalDist * width).toFloat()
+                    val lastX = ((distances[lastIdx] / totalDist * width * zoomX) - offsetX).toFloat()
                     segFillPath.lineTo(lastX, height)
                     segFillPath.close()
 
@@ -1359,7 +1395,7 @@ fun ElevationChart(
                 val color = Color(0xFF2196F3)
 
                 distances.forEachIndexed { i, d ->
-                    val x = (d / totalDist * width).toFloat()
+                    val x = ((d / totalDist * width * zoomX) - offsetX).toFloat()
                     val y = (height - ((altitudes[i] - minAlt) / altRange * height)).toFloat()
 
                     if (i == 0) {
@@ -1381,7 +1417,7 @@ fun ElevationChart(
             }
 
             if (highlightedIndex != null && highlightedIndex in distances.indices) {
-                val hX = (distances[highlightedIndex] / totalDist * width).toFloat()
+                val hX = ((distances[highlightedIndex] / totalDist * width * zoomX) - offsetX).toFloat()
                 val hY = (height - ((altitudes[highlightedIndex] - minAlt) / altRange * height)).toFloat()
 
                 drawLine(
@@ -1446,11 +1482,11 @@ fun ElevationChart(
     }
 }
 
-private fun findNearestIndex(x: Float, width: Int, distances: List<Double>): Int? {
+private fun findNearestIndex(x: Float, width: Int, distances: List<Double>, zoomX: Float = 1f, offsetX: Float = 0f): Int? {
     if (distances.isEmpty()) return null
     val totalDist = distances.last()
     if (totalDist <= 0) return 0
-    val targetDist = (x / width) * totalDist
+    val targetDist = ((x + offsetX) / (width * zoomX)) * totalDist
     
     var low = 0
     var high = distances.size - 1
