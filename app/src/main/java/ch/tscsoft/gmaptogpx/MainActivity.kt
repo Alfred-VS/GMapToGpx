@@ -100,12 +100,14 @@ class MapViewModel : ViewModel() {
     var visibleRoutes by mutableStateOf<Set<Int>>(emptySet())
         private set
     var isMapFullscreen by mutableStateOf(false)
+    var mapType by mutableStateOf("standard")
 
     fun initPrefs(context: android.content.Context) {
         if (prefs == null) {
             prefs = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
             bikeProfile = prefs?.getString("bike_profile", "fastbike") ?: "fastbike"
             autoAltCount = prefs?.getInt("auto_alt_count", 0) ?: 0
+            mapType = prefs?.getString("map_type", "standard") ?: "standard"
 
             colorMain = prefs?.getString("color_main", "#FF0000FF") ?: "#FF0000FF"
             colorAlt1 = prefs?.getString("color_alt1", "#FFFF00FF") ?: "#FFFF00FF"
@@ -172,6 +174,11 @@ class MapViewModel : ViewModel() {
         } else {
             visibleRoutes + index
         }
+    }
+
+    fun toggleMapType() {
+        mapType = if (mapType == "standard") "satellite" else "standard"
+        prefs?.edit()?.putString("map_type", mapType)?.apply()
     }
 
     fun processSharedText(text: String, context: android.content.Context) {
@@ -1251,6 +1258,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     visibleRoutes = viewModel.visibleRoutes,
                     currentProfile = viewModel.bikeProfile,
                     colors = colors,
+                    mapType = viewModel.mapType,
                     selectedRouteIndex = pagerState.currentPage,
                     onRouteSelected = { index -> 
                         val option = viewModel.routeOptions.getOrNull(index)
@@ -1261,12 +1269,23 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     },
                     modifier = Modifier.fillMaxSize()
                 )
-                SmallFloatingActionButton(
-                    onClick = { viewModel.isMapFullscreen = false },
-                    modifier = Modifier.padding(16.dp).align(Alignment.TopEnd),
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                ) {
-                    Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
+                    SmallFloatingActionButton(
+                        onClick = { viewModel.toggleMapType() },
+                        modifier = Modifier.padding(end = 8.dp),
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    ) {
+                        Icon(
+                            if (viewModel.mapType == "standard") Icons.Default.Layers else Icons.Default.Map,
+                            contentDescription = "Kartentyp umschalten"
+                        )
+                    }
+                    SmallFloatingActionButton(
+                        onClick = { viewModel.isMapFullscreen = false },
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    ) {
+                        Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                    }
                 }
             }
         } else {
@@ -1343,18 +1362,30 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             visibleRoutes = viewModel.visibleRoutes,
                             currentProfile = viewModel.bikeProfile,
                             colors = colors,
+                            mapType = viewModel.mapType,
                             selectedRouteIndex = pagerState.currentPage,
                             onRouteSelected = { index -> 
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             },
                             modifier = Modifier.fillMaxSize()
                         )
-                        SmallFloatingActionButton(
-                            onClick = { viewModel.isMapFullscreen = true },
-                            modifier = Modifier.padding(8.dp).align(Alignment.TopEnd),
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                        ) {
-                            Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                        Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.toggleMapType() },
+                                modifier = Modifier.padding(end = 8.dp),
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(
+                                    if (viewModel.mapType == "standard") Icons.Default.Layers else Icons.Default.Map,
+                                    contentDescription = "Kartentyp umschalten"
+                                )
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.isMapFullscreen = true },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1477,12 +1508,13 @@ fun MapPreview(
     visibleRoutes: Set<Int>,
     currentProfile: String,
     colors: List<String>,
+    mapType: String = "standard",
     selectedRouteIndex: Int = -1,
     onRouteSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Only reload the full HTML if routes or colors change
-    val htmlContent = remember(options, visibleRoutes, currentProfile, colors) {
+    // Only reload the full HTML if routes or colors or mapType change
+    val htmlContent = remember(options, visibleRoutes, currentProfile, colors, mapType) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
@@ -1527,7 +1559,18 @@ fun MapPreview(
             <div id="map"></div>
             <script>
                 var map = L.map('map');
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
+                
+                var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
+                var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EBP, and the GIS User Community'
+                });
+
+                if ('$mapType' === 'satellite') {
+                    satellite.addTo(map);
+                } else {
+                    osm.addTo(map);
+                }
+
                 var routesData = $jsonString;
                 var routeLayers = [];
                 var labelLayers = [];
