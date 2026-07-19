@@ -33,6 +33,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.geometry.Offset
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -101,6 +105,9 @@ class MapViewModel : ViewModel() {
         private set
     var isMapFullscreen by mutableStateOf(false)
     var mapType by mutableStateOf("standard")
+
+    var highlightedPointIndex by mutableStateOf<Int?>(null)
+    var highlightedRouteIndex by mutableStateOf<Int?>(null)
 
     fun initPrefs(context: android.content.Context) {
         if (prefs == null) {
@@ -174,6 +181,15 @@ class MapViewModel : ViewModel() {
         } else {
             visibleRoutes + index
         }
+        if (highlightedRouteIndex == index) {
+            highlightedPointIndex = null
+            highlightedRouteIndex = null
+        }
+    }
+
+    fun setHighlight(routeIdx: Int?, pointIdx: Int?) {
+        highlightedRouteIndex = routeIdx
+        highlightedPointIndex = pointIdx
     }
 
     fun toggleMapType() {
@@ -1051,7 +1067,13 @@ fun HaftungText() {
 }
 
 @Composable
-fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: Modifier = Modifier) {
+fun ElevationChart(
+    altitudes: List<Double>,
+    distances: List<Double>,
+    highlightedIndex: Int? = null,
+    onPointHighlighted: (Int?) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     if (altitudes.isEmpty() || altitudes.size != distances.size) return
 
     val minAlt = (altitudes.minOrNull() ?: 0.0)
@@ -1061,16 +1083,46 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
 
     val color = MaterialTheme.colorScheme.primary
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val highlightColor = MaterialTheme.colorScheme.error
 
     Column(modifier = modifier) {
+        val currentAlt = if (highlightedIndex != null && highlightedIndex in altitudes.indices) {
+            altitudes[highlightedIndex]
+        } else maxAlt
+
         Text(
-            "${maxAlt.toInt()} m",
+            "${currentAlt.toInt()} m",
             style = MaterialTheme.typography.labelSmall,
-            color = labelColor,
+            color = if (highlightedIndex != null) highlightColor else labelColor,
             modifier = Modifier.padding(bottom = 2.dp)
         )
 
-        Canvas(modifier = Modifier.fillMaxWidth().weight(1f)) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .pointerInput(distances) {
+                    detectTapGestures { offset ->
+                        val x = offset.x
+                        val index = findNearestIndex(x, size.width, distances)
+                        onPointHighlighted(index)
+                    }
+                }
+                .pointerInput(distances) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val index = findNearestIndex(offset.x, size.width, distances)
+                            onPointHighlighted(index)
+                        },
+                        onDragEnd = { /* keep highlight or clear? keep for now */ },
+                        onDragCancel = { },
+                        onDrag = { change, _ ->
+                            val index = findNearestIndex(change.position.x, size.width, distances)
+                            onPointHighlighted(index)
+                        }
+                    )
+                }
+        ) {
             val width = size.width
             val height = size.height
 
@@ -1098,19 +1150,66 @@ fun ElevationChart(altitudes: List<Double>, distances: List<Double>, modifier: M
 
             drawPath(fillPath, color = color.copy(alpha = 0.2f))
             drawPath(path, color = color, style = Stroke(width = 2.dp.toPx()))
+
+            // Draw highlight
+            if (highlightedIndex != null && highlightedIndex in distances.indices) {
+                val hX = (distances[highlightedIndex] / totalDist * width).toFloat()
+                val hY = (height - ((altitudes[highlightedIndex] - minAlt) / altRange * height)).toFloat()
+
+                drawLine(
+                    color = highlightColor,
+                    start = Offset(hX, 0f),
+                    end = Offset(hX, height),
+                    strokeWidth = 1.dp.toPx()
+                )
+                drawCircle(
+                    color = highlightColor,
+                    center = Offset(hX, hY),
+                    radius = 4.dp.toPx()
+                )
+            }
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            val currentDist = if (highlightedIndex != null && highlightedIndex in distances.indices) {
+                distances[highlightedIndex]
+            } else totalDist
+
             Text("${minAlt.toInt()} m", style = MaterialTheme.typography.labelSmall, color = labelColor)
             Text(
-                String.format(Locale.US, "%.1f km", totalDist / 1000.0),
+                String.format(Locale.US, "%.1f km", currentDist / 1000.0),
                 style = MaterialTheme.typography.labelSmall,
-                color = labelColor
+                color = if (highlightedIndex != null) highlightColor else labelColor
             )
         }
+    }
+}
+
+private fun findNearestIndex(x: Float, width: Int, distances: List<Double>): Int? {
+    if (distances.isEmpty()) return null
+    val totalDist = distances.last()
+    if (totalDist <= 0) return 0
+    val targetDist = (x / width) * totalDist
+    
+    var low = 0
+    var high = distances.size - 1
+    
+    while (low <= high) {
+        val mid = (low + high) / 2
+        if (distances[mid] < targetDist) low = mid + 1
+        else if (distances[mid] > targetDist) high = mid - 1
+        else return mid
+    }
+    
+    return when {
+        low >= distances.size -> distances.size - 1
+        high < 0 -> 0
+        else -> if (Math.abs(distances[low] - targetDist) < Math.abs(distances[high] - targetDist)) low else high
     }
 }
 
@@ -1203,6 +1302,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
 
+    LaunchedEffect(pagerState.currentPage) {
+        if (viewModel.highlightedRouteIndex != pagerState.currentPage) {
+            viewModel.setHighlight(null, null)
+        }
+    }
+
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val totalHeight = maxHeight
         val fixedElementsHeight = 240.dp // Estimated height of text, buttons, and padding
@@ -1260,12 +1365,18 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     colors = colors,
                     mapType = viewModel.mapType,
                     selectedRouteIndex = pagerState.currentPage,
+                    highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                    highlightedPointIndex = viewModel.highlightedPointIndex,
                     onRouteSelected = { index -> 
                         val option = viewModel.routeOptions.getOrNull(index)
                         if (option != null) {
                             selectedRouteForDialog = option
                             scope.launch { pagerState.scrollToPage(index) }
                         }
+                    },
+                    onPointSelected = { rIdx, pIdx ->
+                        viewModel.setHighlight(rIdx, pIdx)
+                        scope.launch { pagerState.scrollToPage(rIdx) }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -1364,8 +1475,14 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             colors = colors,
                             mapType = viewModel.mapType,
                             selectedRouteIndex = pagerState.currentPage,
+                            highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                            highlightedPointIndex = viewModel.highlightedPointIndex,
                             onRouteSelected = { index -> 
                                 scope.launch { pagerState.animateScrollToPage(index) }
+                            },
+                            onPointSelected = { rIdx, pIdx ->
+                                viewModel.setHighlight(rIdx, pIdx)
+                                scope.launch { pagerState.animateScrollToPage(rIdx) }
                             },
                             modifier = Modifier.fillMaxSize()
                         )
@@ -1440,6 +1557,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                     ElevationChart(
                                         altitudes = option.altitudes,
                                         distances = option.distances,
+                                        highlightedIndex = if (viewModel.highlightedRouteIndex == page) viewModel.highlightedPointIndex else null,
+                                        onPointHighlighted = { idx -> viewModel.setHighlight(page, idx) },
                                         modifier = Modifier.fillMaxWidth().height(chartHeight).padding(top = 4.dp)
                                     )
                                 }
@@ -1510,7 +1629,10 @@ fun MapPreview(
     colors: List<String>,
     mapType: String = "standard",
     selectedRouteIndex: Int = -1,
+    highlightedRouteIndex: Int? = null,
+    highlightedPointIndex: Int? = null,
     onRouteSelected: (Int) -> Unit,
+    onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     // Only reload the full HTML if routes or colors or mapType change
@@ -1574,6 +1696,7 @@ fun MapPreview(
                 var routesData = $jsonString;
                 var routeLayers = [];
                 var labelLayers = [];
+                var highlightMarker = null;
                 var group = new L.featureGroup();
 
                 function isLight(color) {
@@ -1610,6 +1733,30 @@ fun MapPreview(
                             if (isSelected) label.bringToFront();
                         }
                     });
+                    if (highlightMarker) highlightMarker.bringToFront();
+                }
+
+                function setHighlightMarker(routeIdx, pointIdx) {
+                    if (highlightMarker) {
+                        map.removeLayer(highlightMarker);
+                        highlightMarker = null;
+                    }
+                    if (routeIdx === null || pointIdx === null || routeIdx === undefined || pointIdx === undefined) return;
+                    
+                    var route = routesData[routeIdx];
+                    if (!route || !route.isVisible || !route.points[pointIdx]) return;
+                    
+                    var pos = route.points[pointIdx];
+                    highlightMarker = L.circleMarker(pos, {
+                        radius: 8,
+                        color: 'white',
+                        weight: 2,
+                        opacity: 1,
+                        fillColor: 'red',
+                        fillOpacity: 1,
+                        interactive: false
+                    }).addTo(map);
+                    highlightMarker.bringToFront();
                 }
 
                 routesData.forEach(function(route, index) {
@@ -1626,7 +1773,19 @@ fun MapPreview(
                     }).addTo(map);
                     
                     var openFn = function() { if (window.Android) window.Android.selectRoute(route.index); };
-                    polyline.on('click', openFn);
+                    polyline.on('click', function(e) {
+                        if (window.Android) {
+                            var p = e.latlng;
+                            var minD = Infinity;
+                            var bestIdx = 0;
+                            for (var i=0; i<route.points.length; i++) {
+                                var rp = route.points[i];
+                                var d = Math.pow(p.lat - rp[0], 2) + Math.pow(p.lng - rp[1], 2);
+                                if (d < minD) { minD = d; bestIdx = i; }
+                            }
+                            window.Android.selectPoint(route.index, bestIdx);
+                        }
+                    });
                     
                     var tooltip = null;
                     if (route.points.length > 2) {
@@ -1672,6 +1831,9 @@ fun MapPreview(
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
                     fun selectRoute(index: Int) { onRouteSelected(index) }
+
+                    @android.webkit.JavascriptInterface
+                    fun selectPoint(routeIdx: Int, pointIdx: Int) { onPointSelected(routeIdx, pointIdx) }
                 }, "Android")
                 webViewClient = WebViewClient()
                 setOnTouchListener { v, event ->
@@ -1687,6 +1849,7 @@ fun MapPreview(
             } else {
                 // If only selectedRouteIndex changed, use JS to update
                 webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
+                webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
             }
         }
     )
