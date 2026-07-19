@@ -208,8 +208,18 @@ class MapViewModel : ViewModel() {
         highlightedPointIndex = pointIdx
     }
 
+    fun updateMapType(type: String) {
+        mapType = type
+        prefs?.edit()?.putString("map_type", type)?.apply()
+    }
+
     fun toggleMapType() {
-        mapType = if (mapType == "standard") "satellite" else "standard"
+        mapType = when (mapType) {
+            "standard" -> "topo"
+            "topo" -> "cycle"
+            "cycle" -> "satellite"
+            else -> "standard"
+        }
         prefs?.edit()?.putString("map_type", mapType)?.apply()
     }
 
@@ -1573,6 +1583,60 @@ fun RouteDetailDialog(
     )
 }
 
+@Composable
+fun MapLayerSelector(
+    currentType: String,
+    onTypeSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val layers = listOf(
+        "standard" to ("Standard" to Icons.Default.Layers),
+        "topo" to ("OpenTopoMap" to Icons.Default.Terrain),
+        "cycle" to ("CyclOSM" to Icons.Default.PedalBike),
+        "satellite" to ("Satellite" to Icons.Default.Satellite)
+    )
+
+    Box(modifier = modifier) {
+        SmallFloatingActionButton(
+            onClick = { expanded = true },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+        ) {
+            Icon(
+                when (currentType) {
+                    "standard" -> Icons.Default.Layers
+                    "topo" -> Icons.Default.Terrain
+                    "cycle" -> Icons.Default.PedalBike
+                    "satellite" -> Icons.Default.Satellite
+                    else -> Icons.Default.Map
+                },
+                contentDescription = "Kartentyp auswählen"
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            layers.forEach { (id, data) ->
+                val (label, icon) = data
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = { Icon(icon, null) },
+                    trailingIcon = {
+                        if (currentType == id) {
+                            Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
+                        }
+                    },
+                    onClick = {
+                        onTypeSelected(id)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
@@ -1676,16 +1740,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxSize()
                 )
                 Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
-                    SmallFloatingActionButton(
-                        onClick = { viewModel.toggleMapType() },
-                        modifier = Modifier.padding(end = 8.dp),
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                    ) {
-                        Icon(
-                            if (viewModel.mapType == "standard") Icons.Default.Layers else Icons.Default.Map,
-                            contentDescription = "Kartentyp umschalten"
-                        )
-                    }
+                    MapLayerSelector(
+                        currentType = viewModel.mapType,
+                        onTypeSelected = { viewModel.updateMapType(it) },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
                     SmallFloatingActionButton(
                         onClick = { viewModel.isMapFullscreen = false },
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
@@ -1781,16 +1840,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.fillMaxSize()
                         )
                         Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
-                            SmallFloatingActionButton(
-                                onClick = { viewModel.toggleMapType() },
-                                modifier = Modifier.padding(end = 8.dp),
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(
-                                    if (viewModel.mapType == "standard") Icons.Default.Layers else Icons.Default.Map,
-                                    contentDescription = "Kartentyp umschalten"
-                                )
-                            }
+                            MapLayerSelector(
+                                currentType = viewModel.mapType,
+                                onTypeSelected = { viewModel.updateMapType(it) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
                             SmallFloatingActionButton(
                                 onClick = { viewModel.isMapFullscreen = true },
                                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
@@ -1974,22 +2028,42 @@ fun MapPreview(
                 var map = L.map('map');
                 
                 var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
+                var topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { 
+                    maxZoom: 17,
+                    attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)' 
+                });
+                var cycle = L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {
+                    maxZoom: 20,
+                    attribution: '<a href="https://github.com/cyclosm/cyclosm-cartocss-style/releases" title="CyclOSM - Open Cycling Map">CyclOSM</a> | Map data: &copy; OpenStreetMap contributors'
+                });
                 var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
                     attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EBP, and the GIS User Community'
                 });
 
                 window.setMapType = function(type) {
+                    map.eachLayer(function(layer) {
+                        if (layer instanceof L.TileLayer) {
+                            map.removeLayer(layer);
+                        }
+                    });
+                    
                     if (type === 'satellite') {
-                        map.removeLayer(osm);
                         satellite.addTo(map);
+                    } else if (type === 'topo') {
+                        topo.addTo(map);
+                    } else if (type === 'cycle') {
+                        cycle.addTo(map);
                     } else {
-                        map.removeLayer(satellite);
                         osm.addTo(map);
                     }
                 };
 
                 if ('$mapType' === 'satellite') {
                     satellite.addTo(map);
+                } else if ('$mapType' === 'topo') {
+                    topo.addTo(map);
+                } else if ('$mapType' === 'cycle') {
+                    cycle.addTo(map);
                 } else {
                     osm.addTo(map);
                 }
@@ -1999,6 +2073,7 @@ fun MapPreview(
                 var labelLayers = [];
                 var highlightMarker = null;
                 var group = new L.featureGroup();
+                L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 
                 function isLight(color) {
                     var r, g, b, hsp;
