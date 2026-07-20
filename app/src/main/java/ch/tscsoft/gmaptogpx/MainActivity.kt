@@ -383,7 +383,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         
                         status = "Lade BRouter Route ($profileName)..."
                         val result = getBikeRoute(points, effectiveProfile, 0)
-                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points, result.altitudes), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds, segments = result.segments, surfaceSummary = createSurfaceSummary(result.segments)))
+                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points, result.altitudes, result.segments), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds, segments = result.segments, surfaceSummary = createSurfaceSummary(result.segments)))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
@@ -392,7 +392,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
                         
-                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute, mainResult.altitudes), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds, segments = mainResult.segments, surfaceSummary = createSurfaceSummary(mainResult.segments)))
+                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute, mainResult.altitudes, mainResult.segments), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds, segments = mainResult.segments, surfaceSummary = createSurfaceSummary(mainResult.segments)))
                         
                         // Fetch Alternatives according to setting
                         for (i in 1..autoAltCount) {
@@ -401,7 +401,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                             val altRoute = altResult.points
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
+                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                             }
                         }
                     }
@@ -448,6 +448,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private fun processGpxContent(gpxContent: String, title: String, context: android.content.Context) {
         val points = mutableListOf<Pair<Double, Double>>()
         val alts = mutableListOf<Double>()
+        val surfaces = mutableListOf<String>()
+        val highways = mutableListOf<String>()
         
         // Robust GPX Parsing using Regex
         val trkptBlockRegex = """<trkpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(.*?)</trkpt>""".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -456,9 +458,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             val lon = match.groupValues[2].toDoubleOrNull()
             val content = match.groupValues[3]
             val ele = """<ele>([-+]?\d+(\.\d+)?)</ele>""".toRegex().find(content)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+            val surface = """<surface>(.*?)</surface>""".toRegex().find(content)?.groupValues?.get(1) ?: ""
+            val highway = """<highway>(.*?)</highway>""".toRegex().find(content)?.groupValues?.get(1) ?: ""
+            
             if (lat != null && lon != null) {
                 points.add(lat to lon)
                 alts.add(ele)
+                surfaces.add(surface)
+                highways.add(highway)
             }
         }
 
@@ -469,9 +476,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 val lon = match.groupValues[2].toDoubleOrNull()
                 val content = match.groupValues[3]
                 val ele = """<ele>([-+]?\d+(\.\d+)?)</ele>""".toRegex().find(content)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+                val surface = """<surface>(.*?)</surface>""".toRegex().find(content)?.groupValues?.get(1) ?: ""
+                val highway = """<highway>(.*?)</highway>""".toRegex().find(content)?.groupValues?.get(1) ?: ""
+
                 if (lat != null && lon != null) {
                     points.add(lat to lon)
                     alts.add(ele)
+                    surfaces.add(surface)
+                    highways.add(highway)
                 }
             }
         }
@@ -496,6 +508,39 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 distances.add(currentD)
             }
 
+            // Reconstruct segments from parsed surface/highway data
+            val resSegments = mutableListOf<RouteSegment>()
+            if (surfaces.any { it.isNotEmpty() } || highways.any { it.isNotEmpty() }) {
+                var lastS = surfaces.getOrNull(0) ?: ""
+                var lastH = highways.getOrNull(0) ?: ""
+                var startIndex = 0
+                var segmentDist = 0.0
+                var startAlt = alts.getOrNull(0) ?: 0.0
+
+                for (i in 1 until points.size) {
+                    val s = surfaces.getOrNull(i) ?: ""
+                    val h = highways.getOrNull(i) ?: ""
+                    val d = calculateDistanceBetween(points[i-1].first, points[i-1].second, points[i].first, points[i].second)
+                    
+                    if (s != lastS || h != lastH || i == points.size - 1) {
+                        val endIndex = i
+                        if (i == points.size - 1) segmentDist += d
+                        
+                        val elevDiff = (alts.getOrNull(endIndex) ?: 0.0) - startAlt
+                        val gradient = if (segmentDist > 0) (elevDiff / segmentDist) * 100.0 else 0.0
+                        resSegments.add(RouteSegment(lastS, lastH, gradient, segmentDist, startIndex, endIndex))
+                        
+                        lastS = s
+                        lastH = h
+                        startIndex = i
+                        segmentDist = d
+                        startAlt = alts.getOrNull(i) ?: 0.0
+                    } else {
+                        segmentDist += d
+                    }
+                }
+            }
+
             val option = RouteOption(
                 title = title,
                 points = points,
@@ -506,7 +551,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 inputPoints = points,
                 distanceMeters = dist,
                 elevationGain = gain.toInt(),
-                elevationLoss = loss.toInt()
+                elevationLoss = loss.toInt(),
+                segments = resSegments,
+                surfaceSummary = if (resSegments.isNotEmpty()) createSurfaceSummary(resSegments) else emptyMap()
             )
             routeOptions = listOf(option)
             visibleRoutes = setOf(0)
@@ -803,7 +850,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     val altRoute = altResult.points
                     
                     if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
-                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
+                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                     }
                 }
                 routeOptions = currentOptions
@@ -993,7 +1040,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         return sortedPoints.distinct()
     }
 
-    private fun createGpx(points: List<Pair<Double, Double>>, altitudes: List<Double>? = null): String {
+    private fun createGpx(points: List<Pair<Double, Double>>, altitudes: List<Double>? = null, segments: List<RouteSegment>? = null): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
         sdf.timeZone = TimeZone.getTimeZone("UTC")
         val time = sdf.format(Date())
@@ -1012,6 +1059,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             if (altitudes != null && altitudes.isNotEmpty()) {
                 sb.append("    <ele>${altitudes[0]}</ele>\n")
             }
+            if (segments != null && segments.isNotEmpty()) {
+                val seg = segments.find { 0 in it.startIndex..it.endIndex }
+                if (seg != null) {
+                    sb.append("    <extensions>\n")
+                    sb.append("      <surface>${seg.surface}</surface>\n")
+                    sb.append("      <highway>${seg.highway}</highway>\n")
+                    sb.append("    </extensions>\n")
+                }
+            }
             sb.append("    <time>$time</time>\n")
             sb.append("  </wpt>\n")
         } else {
@@ -1025,6 +1081,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 sb.append("      <trkpt lat=\"$lat\" lon=\"$lon\">\n")
                 if (altitudes != null && i < altitudes.size) {
                     sb.append("        <ele>${altitudes[i]}</ele>\n")
+                }
+                if (segments != null && segments.isNotEmpty()) {
+                    val seg = segments.find { i in it.startIndex..it.endIndex }
+                    if (seg != null) {
+                        sb.append("        <extensions>\n")
+                        sb.append("          <surface>${seg.surface}</surface>\n")
+                        sb.append("          <highway>${seg.highway}</highway>\n")
+                        sb.append("        </extensions>\n")
+                    }
                 }
                 sb.append("        <time>$time</time>\n")
                 sb.append("      </trkpt>\n")
