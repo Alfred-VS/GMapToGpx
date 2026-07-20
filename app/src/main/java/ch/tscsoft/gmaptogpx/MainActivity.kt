@@ -49,6 +49,9 @@ import androidx.compose.ui.geometry.Offset
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,11 +137,16 @@ class MapViewModel : ViewModel() {
 
     var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
     var centerOnUserRequested by mutableStateOf(false)
+    var isFollowMode by mutableStateOf(false)
+        private set
+
+    private var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
+    private var locationCallback: LocationCallback? = null
 
     fun updateLocation(context: android.content.Context, centerOnUser: Boolean = false, highlightOnRoute: Int? = null) {
-        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+        val client = fusedLocationClient ?: LocationServices.getFusedLocationProviderClient(context).also { fusedLocationClient = it }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                 .addOnSuccessListener { location ->
                     if (location != null) {
                         userLocation = location.latitude to location.longitude
@@ -151,6 +159,51 @@ class MapViewModel : ViewModel() {
                     }
                 }
         }
+    }
+
+    fun toggleFollowMode(context: android.content.Context, routeIndex: Int?) {
+        if (isFollowMode) {
+            stopFollowMode()
+        } else {
+            startFollowMode(context, routeIndex)
+        }
+    }
+
+    private fun startFollowMode(context: android.content.Context, routeIndex: Int?) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+
+        val client = fusedLocationClient ?: LocationServices.getFusedLocationProviderClient(context).also { fusedLocationClient = it }
+        
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000L)
+            .setMinUpdateIntervalMillis(1000L)
+            .build()
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val location = result.lastLocation ?: return
+                userLocation = location.latitude to location.longitude
+                centerOnUserRequested = true
+                if (routeIndex != null) {
+                    highlightNearestPointToUser(routeIndex)
+                }
+            }
+        }
+
+        client.requestLocationUpdates(request, locationCallback!!, android.os.Looper.getMainLooper())
+        isFollowMode = true
+    }
+
+    fun stopFollowMode() {
+        locationCallback?.let {
+            fusedLocationClient?.removeLocationUpdates(it)
+        }
+        locationCallback = null
+        isFollowMode = false
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopFollowMode()
     }
 
     fun initPrefs(context: android.content.Context) {
@@ -1862,12 +1915,27 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
                     }
                 }
-                SmallFloatingActionButton(
-                    onClick = { onMyLocationClick() },
+                Column(
                     modifier = Modifier.padding(16.dp).align(Alignment.BottomEnd),
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
+                    SmallFloatingActionButton(
+                        onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        containerColor = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    ) {
+                        Icon(
+                            if (viewModel.isFollowMode) Icons.Default.Navigation else Icons.Default.Explore, 
+                            contentDescription = "Routen folgen",
+                            tint = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    SmallFloatingActionButton(
+                        onClick = { onMyLocationClick() },
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                    ) {
+                        Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
+                    }
                 }
             }
         } else {
@@ -1973,12 +2041,27 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
                             }
                         }
-                        SmallFloatingActionButton(
-                            onClick = { onMyLocationClick() },
+                        Column(
                             modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            horizontalAlignment = Alignment.End
                         ) {
-                            Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                                containerColor = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(
+                                    if (viewModel.isFollowMode) Icons.Default.Navigation else Icons.Default.Explore, 
+                                    contentDescription = "Routen folgen",
+                                    tint = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { onMyLocationClick() },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -2172,7 +2255,10 @@ fun MapPreview(
                     attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EBP, and the GIS User Community'
                 });
 
+                var currentMapType = '$mapType';
                 window.setMapType = function(type) {
+                    if (type === currentMapType) return;
+                    
                     map.eachLayer(function(layer) {
                         if (layer instanceof L.TileLayer) {
                             map.removeLayer(layer);
@@ -2188,6 +2274,7 @@ fun MapPreview(
                     } else {
                         osm.addTo(map);
                     }
+                    currentMapType = type;
                 };
 
                 if ('$mapType' === 'satellite') {
@@ -2209,26 +2296,31 @@ fun MapPreview(
                 L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 
                 window.setUserLocation = function(lat, lng, center) {
-                    if (userMarker) {
-                        map.removeLayer(userMarker);
-                    }
                     if (lat !== null && lng !== null) {
-                        userMarker = L.circleMarker([lat, lng], {
-                            radius: 7,
-                            color: 'white',
-                            weight: 2,
-                            opacity: 1,
-                            fillColor: '#3880ff',
-                            fillOpacity: 1,
-                            interactive: true
-                        }).addTo(map);
-                        userMarker.on('click', function() {
-                            if (window.Android) window.Android.selectUserPosition();
-                        });
+                        var pos = [lat, lng];
+                        if (userMarker) {
+                            userMarker.setLatLng(pos);
+                        } else {
+                            userMarker = L.circleMarker(pos, {
+                                radius: 7,
+                                color: 'white',
+                                weight: 2,
+                                opacity: 1,
+                                fillColor: '#3880ff',
+                                fillOpacity: 1,
+                                interactive: true
+                            }).addTo(map);
+                            userMarker.on('click', function() {
+                                if (window.Android) window.Android.selectUserPosition();
+                            });
+                        }
                         userMarker.bringToFront();
                         if (center) {
-                            map.panTo([lat, lng]);
+                            map.panTo(pos);
                         }
+                    } else if (userMarker) {
+                        map.removeLayer(userMarker);
+                        userMarker = null;
                     }
                 };
 
@@ -2269,25 +2361,31 @@ fun MapPreview(
                 }
 
                 function setHighlightMarker(routeIdx, pointIdx) {
-                    if (highlightMarker) {
-                        map.removeLayer(highlightMarker);
-                        highlightMarker = null;
+                    if (routeIdx === null || pointIdx === null || routeIdx === undefined || pointIdx === undefined) {
+                        if (highlightMarker) {
+                            map.removeLayer(highlightMarker);
+                            highlightMarker = null;
+                        }
+                        return;
                     }
-                    if (routeIdx === null || pointIdx === null || routeIdx === undefined || pointIdx === undefined) return;
                     
                     var route = routesData[routeIdx];
                     if (!route || !route.isVisible || !route.points[pointIdx]) return;
                     
                     var pos = route.points[pointIdx];
-                    highlightMarker = L.circleMarker(pos, {
-                        radius: 8,
-                        color: 'white',
-                        weight: 2,
-                        opacity: 1,
-                        fillColor: 'red',
-                        fillOpacity: 1,
-                        interactive: false
-                    }).addTo(map);
+                    if (highlightMarker) {
+                        highlightMarker.setLatLng(pos);
+                    } else {
+                        highlightMarker = L.circleMarker(pos, {
+                            radius: 8,
+                            color: 'white',
+                            weight: 2,
+                            opacity: 1,
+                            fillColor: 'red',
+                            fillOpacity: 1,
+                            interactive: false
+                        }).addTo(map);
+                    }
                     highlightMarker.bringToFront();
                     map.panTo(pos);
                 }
@@ -2379,17 +2477,41 @@ fun MapPreview(
             }
         },
         update = { webView ->
-            if (webView.tag != htmlContent) {
+            val lastState = webView.tag as? MapState ?: MapState()
+            
+            if (lastState.html != htmlContent) {
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
-                webView.tag = htmlContent
+                webView.tag = MapState(html = htmlContent, mapType = mapType, selectedRouteIndex = selectedRouteIndex, highlightedRouteIndex = highlightedRouteIndex, highlightedPointIndex = highlightedPointIndex)
             } else {
-                webView.evaluateJavascript("setMapType('$mapType')", null)
-                webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
-                webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
+                if (lastState.mapType != mapType) {
+                    webView.evaluateJavascript("setMapType('$mapType')", null)
+                }
+                if (lastState.selectedRouteIndex != selectedRouteIndex) {
+                    webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
+                }
                 
                 val lat = userLocation?.first
                 val lng = userLocation?.second
-                webView.evaluateJavascript("setUserLocation(${lat ?: "null"}, ${lng ?: "null"}, $centerOnUserRequested)", null)
+                // Always update location if it changed, center if requested
+                if (lastState.userLat != lat || lastState.userLng != lng || centerOnUserRequested) {
+                    webView.evaluateJavascript("setUserLocation(${lat ?: "null"}, ${lng ?: "null"}, $centerOnUserRequested)", null)
+                }
+                
+                if (lastState.highlightedRouteIndex != highlightedRouteIndex || lastState.highlightedPointIndex != highlightedPointIndex) {
+                    webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
+                }
+
+                // Update the tag with new state
+                webView.tag = MapState(
+                    html = htmlContent,
+                    mapType = mapType,
+                    selectedRouteIndex = selectedRouteIndex,
+                    highlightedRouteIndex = highlightedRouteIndex,
+                    highlightedPointIndex = highlightedPointIndex,
+                    userLat = lat,
+                    userLng = lng
+                )
+
                 if (centerOnUserRequested) {
                     onCenterOnUserHandled()
                 }
@@ -2397,3 +2519,13 @@ fun MapPreview(
         }
     )
 }
+
+private data class MapState(
+    val html: String = "",
+    val mapType: String = "",
+    val selectedRouteIndex: Int = -1,
+    val highlightedRouteIndex: Int? = null,
+    val highlightedPointIndex: Int? = null,
+    val userLat: Double? = null,
+    val userLng: Double? = null
+)
