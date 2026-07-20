@@ -1,6 +1,7 @@
 package ch.tscsoft.gmaptogpx
 
 import android.Manifest
+import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -29,6 +30,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,6 +48,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.geometry.Offset
+import ch.tscsoft.gmaptogpx.data.*
 import ch.tscsoft.gmaptogpx.ui.theme.GMapToGpxTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -53,6 +56,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -104,10 +108,21 @@ data class BRouterResult(
     val segments: List<RouteSegment> = emptyList()
 )
 
-class MapViewModel : ViewModel() {
+class MapViewModel(application: Application) : AndroidViewModel(application) {
     private var prefs: android.content.SharedPreferences? = null
     private var lastSharedText: String? = null
     private var lastPoints: List<Pair<Double, Double>> = emptyList()
+
+    private val repository: BookmarkRepository
+    val allFolders: Flow<List<BookmarkFolder>>
+    val rootBookmarks: Flow<List<BookmarkRoute>>
+
+    init {
+        val db = BookmarkDatabase.getDatabase(application)
+        repository = BookmarkRepository(db.bookmarkDao())
+        allFolders = repository.allFolders
+        rootBookmarks = repository.rootBookmarks
+    }
 
     var status by mutableStateOf("Warte auf Google Maps Link...")
         private set
@@ -418,76 +433,7 @@ class MapViewModel : ViewModel() {
                 }
 
                 if (gpxContent != null) {
-                    val points = mutableListOf<Pair<Double, Double>>()
-                    val alts = mutableListOf<Double>()
-                    
-                    // Simple GPX Parsing using Regex (as we don't have a full XML parser library dependency)
-                    // Matches <trkpt lat="..." lon="..."> and optional <ele>...</ele>
-                    val trkptRegex = """<trkpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
-                    trkptRegex.findAll(gpxContent).forEach { match ->
-                        val lat = match.groupValues[1].toDoubleOrNull()
-                        val lon = match.groupValues[2].toDoubleOrNull()
-                        val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
-                        if (lat != null && lon != null) {
-                            points.add(lat to lon)
-                            alts.add(ele)
-                        }
-                    }
-
-                    // Fallback to waypoints if no trackpoints found
-                    if (points.isEmpty()) {
-                        val wptRegex = """<wpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
-                        wptRegex.findAll(gpxContent).forEach { match ->
-                            val lat = match.groupValues[1].toDoubleOrNull()
-                            val lon = match.groupValues[2].toDoubleOrNull()
-                            val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
-                            if (lat != null && lon != null) {
-                                points.add(lat to lon)
-                                alts.add(ele)
-                            }
-                        }
-                    }
-
-                    if (points.isNotEmpty()) {
-                        lastPoints = points
-                        val dist = calculateDistance(points)
-                        
-                        // Elevation Gain/Loss calculation
-                        var gain = 0.0
-                        var loss = 0.0
-                        for (i in 1 until alts.size) {
-                            val diff = alts[i] - alts[i-1]
-                            if (diff > 0.5) gain += diff
-                            else if (diff < -0.5) loss += -diff
-                        }
-
-                        val distances = mutableListOf<Double>()
-                        var currentD = 0.0
-                        distances.add(0.0)
-                        for (i in 1 until points.size) {
-                            currentD += calculateDistanceBetween(points[i-1].first, points[i-1].second, points[i].first, points[i].second)
-                            distances.add(currentD)
-                        }
-
-                        val option = RouteOption(
-                            title = "Importierte GPX",
-                            points = points,
-                            altitudes = alts,
-                            distances = distances,
-                            gpxContent = gpxContent,
-                            isOriginal = true,
-                            inputPoints = points,
-                            distanceMeters = dist,
-                            elevationGain = gain.toInt(),
-                            elevationLoss = loss.toInt()
-                        )
-                        routeOptions = listOf(option)
-                        visibleRoutes = setOf(0)
-                        status = "GPX geladen!"
-                        lastSharedText = null // Reset last shared text
-                    } else {
-                        status = "Keine Wegpunkte in GPX gefunden."
-                    }
+                    processGpxContent(gpxContent, "Importierte GPX", context)
                 } else {
                     status = "Datei konnte nicht gelesen werden."
                 }
@@ -497,6 +443,127 @@ class MapViewModel : ViewModel() {
                 isProcessing = false
             }
         }
+    }
+
+    private fun processGpxContent(gpxContent: String, title: String, context: android.content.Context) {
+        val points = mutableListOf<Pair<Double, Double>>()
+        val alts = mutableListOf<Double>()
+        
+        // Simple GPX Parsing using Regex
+        val trkptRegex = """<trkpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
+        trkptRegex.findAll(gpxContent).forEach { match ->
+            val lat = match.groupValues[1].toDoubleOrNull()
+            val lon = match.groupValues[2].toDoubleOrNull()
+            val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
+            if (lat != null && lon != null) {
+                points.add(lat to lon)
+                alts.add(ele)
+            }
+        }
+
+        if (points.isEmpty()) {
+            val wptRegex = """<wpt\s+lat=["']([-+]?\d+\.\d+)["']\s+lon=["']([-+]?\d+\.\d+)["']>(\s*<ele>([-+]?\d+\.\d+)</ele>)?""".toRegex()
+            wptRegex.findAll(gpxContent).forEach { match ->
+                val lat = match.groupValues[1].toDoubleOrNull()
+                val lon = match.groupValues[2].toDoubleOrNull()
+                val ele = match.groupValues[4].toDoubleOrNull() ?: 0.0
+                if (lat != null && lon != null) {
+                    points.add(lat to lon)
+                    alts.add(ele)
+                }
+            }
+        }
+
+        if (points.isNotEmpty()) {
+            lastPoints = points
+            val dist = calculateDistance(points)
+            
+            var gain = 0.0
+            var loss = 0.0
+            for (i in 1 until alts.size) {
+                val diff = alts[i] - alts[i-1]
+                if (diff > 0.5) gain += diff
+                else if (diff < -0.5) loss += -diff
+            }
+
+            val distances = mutableListOf<Double>()
+            var currentD = 0.0
+            distances.add(0.0)
+            for (i in 1 until points.size) {
+                currentD += calculateDistanceBetween(points[i-1].first, points[i-1].second, points[i].first, points[i].second)
+                distances.add(currentD)
+            }
+
+            val option = RouteOption(
+                title = title,
+                points = points,
+                altitudes = alts,
+                distances = distances,
+                gpxContent = gpxContent,
+                isOriginal = true,
+                inputPoints = points,
+                distanceMeters = dist,
+                elevationGain = gain.toInt(),
+                elevationLoss = loss.toInt()
+            )
+            routeOptions = listOf(option)
+            visibleRoutes = setOf(0)
+            status = "$title geladen!"
+            lastSharedText = null
+        } else {
+            status = "Keine Wegpunkte in GPX gefunden."
+        }
+    }
+
+    fun saveBookmark(option: RouteOption, title: String, folderId: Long? = null) {
+        viewModelScope.launch {
+            repository.insertBookmark(
+                title = title,
+                gpxContent = option.gpxContent,
+                folderId = folderId,
+                distanceMeters = option.distanceMeters,
+                elevationGain = option.elevationGain,
+                elevationLoss = option.elevationLoss,
+                totalTimeSeconds = option.totalTimeSeconds
+            )
+        }
+    }
+
+    fun deleteBookmark(bookmark: BookmarkRoute) {
+        viewModelScope.launch {
+            repository.deleteBookmark(bookmark)
+        }
+    }
+
+    fun addFolder(name: String) {
+        viewModelScope.launch {
+            repository.insertFolder(name)
+        }
+    }
+
+    fun deleteFolder(folder: BookmarkFolder) {
+        viewModelScope.launch {
+            repository.deleteFolder(folder)
+        }
+    }
+
+    fun updateFolder(folder: BookmarkFolder) {
+        viewModelScope.launch {
+            repository.updateFolder(folder)
+        }
+    }
+
+    fun updateBookmark(bookmark: BookmarkRoute) {
+        viewModelScope.launch {
+            repository.updateBookmark(bookmark)
+        }
+    }
+
+    fun getBookmarksInFolder(folderId: Long) = repository.getBookmarksInFolder(folderId)
+
+    fun loadBookmark(bookmark: BookmarkRoute, context: android.content.Context) {
+        initPrefs(context)
+        processGpxContent(bookmark.gpxContent, bookmark.title, context)
     }
 
     private fun getProfileLabel(id: String) = when(id) {
@@ -1027,6 +1094,7 @@ fun MainTopAppBar(viewModel: MapViewModel) {
     var showInfoDialog by remember { mutableStateOf(false) }
     var showLegalDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
+    var showBookmarksDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val altOptions = listOf(0 to "Nur Hauptroute", 1 to "+1 Alternative", 2 to "+2 Alternativen", 3 to "+3 Alternativen")
@@ -1040,6 +1108,9 @@ fun MainTopAppBar(viewModel: MapViewModel) {
             )
         },
         actions = {
+            IconButton(onClick = { showBookmarksDialog = true }) {
+                Icon(Icons.Default.Bookmarks, contentDescription = "Bookmarks")
+            }
             IconButton(onClick = { viewModel.refresh(context) }) {
                 Icon(Icons.Default.Refresh, contentDescription = "Aktualisieren")
             }
@@ -1119,6 +1190,10 @@ fun MainTopAppBar(viewModel: MapViewModel) {
 
     if (showColorDialog) {
         ColorConfigDialog(viewModel) { showColorDialog = false }
+    }
+
+    if (showBookmarksDialog) {
+        BookmarksDialog(viewModel) { showBookmarksDialog = false }
     }
 
     if (showInfoDialog) {
@@ -1654,12 +1729,68 @@ private fun findNearestIndex(x: Float, width: Int, distances: List<Double>, zoom
 }
 
 @Composable
+fun SaveBookmarkDialog(
+    option: RouteOption,
+    viewModel: MapViewModel,
+    onDismiss: () -> Unit
+) {
+    var bookmarkTitle by remember { mutableStateOf(option.title) }
+    var selectedFolderId by remember { mutableStateOf<Long?>(null) }
+    val folders by viewModel.allFolders.collectAsState(initial = emptyList())
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Route speichern") },
+        text = {
+            Column {
+                TextField(
+                    value = bookmarkTitle,
+                    onValueChange = { bookmarkTitle = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("Ordner wählen:", style = MaterialTheme.typography.labelSmall)
+                androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedFolderId = null }) {
+                            RadioButton(selected = selectedFolderId == null, onClick = { selectedFolderId = null })
+                            Text("Hauptverzeichnis")
+                        }
+                    }
+                    items(folders.size) { index ->
+                        val folder = folders[index]
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { selectedFolderId = folder.id }) {
+                            RadioButton(selected = selectedFolderId == folder.id, onClick = { selectedFolderId = folder.id })
+                            Text(folder.name)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                viewModel.saveBookmark(option, bookmarkTitle, selectedFolderId)
+                onDismiss()
+            }) { Text("Speichern") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Abbrechen") }
+        }
+    )
+}
+
+@Composable
 fun RouteDetailDialog(
     option: RouteOption,
+    viewModel: MapViewModel,
     onDismiss: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(option.title) },
@@ -1698,25 +1829,228 @@ fun RouteDetailDialog(
         },
         confirmButton = {},
         dismissButton = {
-            Row (horizontalArrangement = Arrangement.spacedBy(8.dp)){
-                OutlinedButton(
-                    onClick = onEdit,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) {
-                    Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
-                    Text(" Edit", style = MaterialTheme.typography.labelMedium)
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row (horizontalArrangement = Arrangement.spacedBy(8.dp)){
+                    OutlinedButton(
+                        onClick = { showSaveDialog = true },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(18.dp))
+                        Text(" Sichern", style = MaterialTheme.typography.labelMedium)
+                    }
 
+                    OutlinedButton(
+                        onClick = onEdit,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
+                        Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
                 Button(
                     onClick = onShare,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 8.dp)
                 ) {
                     Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
                     Text(" Teilen", style = MaterialTheme.typography.labelMedium)
                 }
             }
+        }
+    )
+
+    if (showSaveDialog) {
+        SaveBookmarkDialog(option, viewModel) { showSaveDialog = false }
+    }
+}
+
+@Composable
+fun BookmarksDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
+    val folders by viewModel.allFolders.collectAsState(initial = emptyList())
+    val rootBookmarks by viewModel.rootBookmarks.collectAsState(initial = emptyList())
+    var currentFolderId by remember { mutableStateOf<Long?>(null) }
+    var currentFolderName by remember { mutableStateOf<String?>(null) }
+    
+    val context = LocalContext.current
+
+    var showAddFolderDialog by remember { mutableStateOf(false) }
+    var folderNameToAdd by remember { mutableStateOf("") }
+
+    var renameFolder by remember { mutableStateOf<BookmarkFolder?>(null) }
+    var renameBookmark by remember { mutableStateOf<BookmarkRoute?>(null) }
+    var newName by remember { mutableStateOf("") }
+
+    val bookmarksInFolderState = if (currentFolderId != null) {
+        viewModel.getBookmarksInFolder(currentFolderId!!).collectAsState(initial = emptyList())
+    } else {
+        null
+    }
+    val bookmarksInFolder = bookmarksInFolderState?.value ?: emptyList()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (currentFolderId != null) {
+                    IconButton(onClick = { 
+                        currentFolderId = null
+                        currentFolderName = null
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Zurück")
+                    }
+                }
+                Text(currentFolderName ?: "Bookmarks")
+                Spacer(Modifier.weight(1f))
+                if (currentFolderId == null) {
+                    IconButton(onClick = { showAddFolderDialog = true }) {
+                        Icon(Icons.Default.CreateNewFolder, contentDescription = "Ordner hinzufügen")
+                    }
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.weight(1f)) {
+                    if (currentFolderId == null) {
+                        items(folders.size) { index ->
+                            val folder = folders[index]
+                            ListItem(
+                                headlineContent = { Text(folder.name) },
+                                leadingContent = { Icon(Icons.Default.Folder, null) },
+                                trailingContent = {
+                                    Row {
+                                        IconButton(onClick = { 
+                                            renameFolder = folder
+                                            newName = folder.name
+                                        }) {
+                                            Icon(Icons.Default.Edit, null)
+                                        }
+                                        IconButton(onClick = { viewModel.deleteFolder(folder) }) {
+                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.clickable {
+                                    currentFolderId = folder.id
+                                    currentFolderName = folder.name
+                                }
+                            )
+                        }
+                        items(rootBookmarks.size) { index ->
+                            val bookmark = rootBookmarks[index]
+                            BookmarkItem(bookmark, viewModel, onDismiss, onRename = {
+                                renameBookmark = bookmark
+                                newName = bookmark.title
+                            })
+                        }
+                    } else {
+                        items(bookmarksInFolder.size) { index ->
+                            val bookmark = bookmarksInFolder[index]
+                            BookmarkItem(bookmark, viewModel, onDismiss, onRename = {
+                                renameBookmark = bookmark
+                                newName = bookmark.title
+                            })
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Schließen") }
+        }
+    )
+
+    if (showAddFolderDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddFolderDialog = false },
+            title = { Text("Neuer Ordner") },
+            text = {
+                TextField(
+                    value = folderNameToAdd,
+                    onValueChange = { folderNameToAdd = it },
+                    placeholder = { Text("Name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (folderNameToAdd.isNotBlank()) {
+                        viewModel.addFolder(folderNameToAdd)
+                        folderNameToAdd = ""
+                        showAddFolderDialog = false
+                    }
+                }) { Text("Erstellen") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddFolderDialog = false }) { Text("Abbrechen") }
+            }
+        )
+    }
+
+    if (renameFolder != null) {
+        AlertDialog(
+            onDismissRequest = { renameFolder = null },
+            title = { Text("Ordner umbenennen") },
+            text = {
+                TextField(value = newName, onValueChange = { newName = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    renameFolder?.let { viewModel.updateFolder(it.copy(name = newName)) }
+                    renameFolder = null
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameFolder = null }) { Text("Abbrechen") }
+            }
+        )
+    }
+
+    if (renameBookmark != null) {
+        AlertDialog(
+            onDismissRequest = { renameBookmark = null },
+            title = { Text("Bookmark umbenennen") },
+            text = {
+                TextField(value = newName, onValueChange = { newName = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    renameBookmark?.let { viewModel.updateBookmark(it.copy(title = newName)) }
+                    renameBookmark = null
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameBookmark = null }) { Text("Abbrechen") }
+            }
+        )
+    }
+}
+
+@Composable
+fun BookmarkItem(bookmark: BookmarkRoute, viewModel: MapViewModel, onDismiss: () -> Unit, onRename: () -> Unit) {
+    val context = LocalContext.current
+    ListItem(
+        headlineContent = { Text(bookmark.title) },
+        supportingContent = {
+            val km = String.format(Locale.US, "%.1f km", bookmark.distanceMeters / 1000.0)
+            Text("$km ▲${bookmark.elevationGain}m ▼${bookmark.elevationLoss}m")
+        },
+        leadingContent = { Icon(Icons.Default.Route, null) },
+        trailingContent = {
+            Row {
+                IconButton(onClick = onRename) {
+                    Icon(Icons.Default.Edit, null)
+                }
+                IconButton(onClick = { viewModel.deleteBookmark(bookmark) }) {
+                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        modifier = Modifier.clickable {
+            viewModel.loadBookmark(bookmark, context)
+            onDismiss()
         }
     )
 }
@@ -1861,6 +2195,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         if (currentDialogRoute != null) {
             RouteDetailDialog(
                 option = currentDialogRoute,
+                viewModel = viewModel,
                 onDismiss = { selectedRouteForDialog = null },
                 onShare = { 
                     scope.launch { viewModel.shareGpx(currentDialogRoute, context) }
@@ -2085,6 +2420,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         }
                         val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
 
+                        var showSaveDialog by remember { mutableStateOf(false) }
+                        if (showSaveDialog) {
+                            SaveBookmarkDialog(option, viewModel) { showSaveDialog = false }
+                        }
+
                         ElevatedCard(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
                         ) {
@@ -2122,6 +2462,15 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 
                                 Spacer(Modifier.height(16.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                                    OutlinedButton(
+                                        onClick = { showSaveDialog = true },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(18.dp))
+                                        Text(" Sichern", style = MaterialTheme.typography.labelMedium)
+                                    }
 
                                     OutlinedButton(
                                         onClick = { onPreview(option) },
