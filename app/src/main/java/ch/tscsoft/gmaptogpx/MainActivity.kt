@@ -2273,7 +2273,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val totalHeight = maxHeight
-        val fixedElementsHeight = 240.dp
+        val fixedElementsHeight = 210.dp
         val minMapHeight = 200.dp
         val minChartHeight = 80.dp
         
@@ -2405,25 +2405,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
-                    val isDirect = viewModel.bikeProfile == "direct"
-                    val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
-                    val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
-
-                    if (canFetchAlts) {
-                        IconButton(
-                            onClick = { viewModel.fetchAlternatives() }
-                        ) {
-                            Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-
                 if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)
@@ -2479,6 +2460,21 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
                             horizontalAlignment = Alignment.End
                         ) {
+                            val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+                            val isDirect = viewModel.bikeProfile == "direct"
+                            val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+                            val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
+
+                            if (canFetchAlts) {
+                                SmallFloatingActionButton(
+                                    onClick = { viewModel.fetchAlternatives() },
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                ) {
+                                    Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+
                             if (viewModel.recordedPath.isNotEmpty()) {
                                 SmallFloatingActionButton(
                                     onClick = { viewModel.clearRecordedPath() },
