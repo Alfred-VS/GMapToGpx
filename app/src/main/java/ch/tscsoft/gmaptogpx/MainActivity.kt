@@ -151,6 +151,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     var highlightedRouteIndex by mutableStateOf<Int?>(null)
 
     var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
+    var recordedPath by mutableStateOf<List<Pair<Double, Double>>>(emptyList())
+        private set
     var centerOnUserRequested by mutableStateOf(false)
     var isFollowMode by mutableStateOf(false)
         private set
@@ -196,7 +198,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
-                userLocation = location.latitude to location.longitude
+                val newPos = location.latitude to location.longitude
+                userLocation = newPos
+                recordedPath = recordedPath + newPos
                 centerOnUserRequested = true
                 if (routeIndex != null) {
                     highlightNearestPointToUser(routeIndex)
@@ -214,6 +218,17 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
         locationCallback = null
         isFollowMode = false
+    }
+
+    fun clearRecordedPath() {
+        recordedPath = emptyList()
+    }
+
+    fun saveRecordedPath() {
+        if (recordedPath.isEmpty()) return
+        val gpx = createGpx(recordedPath)
+        val title = "Aufzeichnung ${SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date())}"
+        saveBookmark(RouteOption(title, recordedPath, gpxContent = gpx), title)
     }
 
     override fun onCleared() {
@@ -2295,6 +2310,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     highlightedRouteIndex = viewModel.highlightedRouteIndex,
                     highlightedPointIndex = viewModel.highlightedPointIndex,
                     userLocation = viewModel.userLocation,
+                    recordedPath = viewModel.recordedPath,
                     centerOnUserRequested = viewModel.centerOnUserRequested,
                     onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
                     onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
@@ -2328,6 +2344,22 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(16.dp).align(Alignment.BottomEnd),
                     horizontalAlignment = Alignment.End
                 ) {
+                    if (viewModel.recordedPath.isNotEmpty()) {
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.clearRecordedPath() },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.saveRecordedPath() },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = "Aufzeichnung speichern", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
                     SmallFloatingActionButton(
                         onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
                         modifier = Modifier.padding(bottom = 8.dp),
@@ -2425,6 +2457,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             highlightedRouteIndex = viewModel.highlightedRouteIndex,
                             highlightedPointIndex = viewModel.highlightedPointIndex,
                             userLocation = viewModel.userLocation,
+                            recordedPath = viewModel.recordedPath,
                             centerOnUserRequested = viewModel.centerOnUserRequested,
                             onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
                             onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
@@ -2454,6 +2487,22 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
                             horizontalAlignment = Alignment.End
                         ) {
+                            if (viewModel.recordedPath.isNotEmpty()) {
+                                SmallFloatingActionButton(
+                                    onClick = { viewModel.clearRecordedPath() },
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                ) {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
+                                }
+                                SmallFloatingActionButton(
+                                    onClick = { viewModel.saveRecordedPath() },
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                ) {
+                                    Icon(Icons.Default.Save, contentDescription = "Aufzeichnung speichern", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
                             SmallFloatingActionButton(
                                 onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
                                 modifier = Modifier.padding(bottom = 8.dp),
@@ -2612,6 +2661,7 @@ fun MapPreview(
     highlightedRouteIndex: Int? = null,
     highlightedPointIndex: Int? = null,
     userLocation: Pair<Double, Double>? = null,
+    recordedPath: List<Pair<Double, Double>> = emptyList(),
     centerOnUserRequested: Boolean = false,
     onCenterOnUserHandled: () -> Unit = {},
     onRouteSelected: (Int) -> Unit,
@@ -2744,6 +2794,25 @@ fun MapPreview(
                     } else if (userMarker) {
                         map.removeLayer(userMarker);
                         userMarker = null;
+                    }
+                };
+
+                var recordedLayer = null;
+                window.setRecordedPath = function(points) {
+                    if (!points || points.length < 2) {
+                        if (recordedLayer) { map.removeLayer(recordedLayer); recordedLayer = null; }
+                        return;
+                    }
+                    if (recordedLayer) {
+                        recordedLayer.setLatLngs(points);
+                    } else {
+                        recordedLayer = L.polyline(points, { 
+                            color: '#FF5722', 
+                            weight: 5, 
+                            opacity: 0.8,
+                            lineCap: 'round',
+                            lineJoin: 'round'
+                        }).addTo(map);
                     }
                 };
 
@@ -2924,6 +2993,11 @@ fun MapPreview(
                     webView.evaluateJavascript("setHighlightMarker($highlightedRouteIndex, $highlightedPointIndex)", null)
                 }
 
+                if (lastState.recordedPath != recordedPath) {
+                    val pointsJson = recordedPath.joinToString(",", prefix = "[", postfix = "]") { "[${it.first},${it.second}]" }
+                    webView.evaluateJavascript("setRecordedPath($pointsJson)", null)
+                }
+
                 // Update the tag with new state
                 webView.tag = MapState(
                     html = htmlContent,
@@ -2932,7 +3006,8 @@ fun MapPreview(
                     highlightedRouteIndex = highlightedRouteIndex,
                     highlightedPointIndex = highlightedPointIndex,
                     userLat = lat,
-                    userLng = lng
+                    userLng = lng,
+                    recordedPath = recordedPath
                 )
 
                 if (centerOnUserRequested) {
@@ -2950,5 +3025,6 @@ private data class MapState(
     val highlightedRouteIndex: Int? = null,
     val highlightedPointIndex: Int? = null,
     val userLat: Double? = null,
-    val userLng: Double? = null
+    val userLng: Double? = null,
+    val recordedPath: List<Pair<Double, Double>> = emptyList()
 )
