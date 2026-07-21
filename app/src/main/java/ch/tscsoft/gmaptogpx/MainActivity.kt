@@ -71,6 +71,19 @@ import kotlinx.serialization.json.*
 
 private val jsonParser = Json { ignoreUnknownKeys = true }
 
+val ROUTE_PROFILES = listOf(
+    "fastbike" to "Rennrad",
+    "trekking" to "Trekking",
+    "mtb" to "Mountainbike",
+    "shortest" to "Kürzeste",
+    "safety" to "Sicherste",
+    "hiking-mountain" to "Bergwandern",
+    "hiking-soft" to "Wandern",
+    "vm-forum" to "Velomobil",
+    "moped" to "Mofa/Moped",
+    "car-test" to "PKW"
+)
+
 data class RouteSegment(
     val surface: String,
     val highway: String,
@@ -630,18 +643,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         processGpxContent(bookmark.gpxContent, bookmark.title, context)
     }
 
-    private fun getProfileLabel(id: String) = when(id) {
-        "fastbike" -> "Rennrad"
-        "mtb" -> "Mountainbike"
-        "trekking" -> "Trekking"
-        "shortest" -> "Kürzeste"
-        "safety" -> "Sicherste"
-        "hiking-soft" -> "Wandern"
-        "hiking-mountain" -> "Bergwandern"
-        "vm-forum" -> "Velomobil"
-        "moped" -> "Mofa/Moped"
-        "car-test" -> "PKW"
-        else -> id
+    private fun getProfileLabel(id: String): String {
+        return ROUTE_PROFILES.find { it.first == id }?.second ?: id
     }
 
     private fun calculateDistance(points: List<Pair<Double, Double>>): Double {
@@ -1179,6 +1182,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainTopAppBar(viewModel: MapViewModel) {
     var showMenu by remember { mutableStateOf(false) }
+    var showProfileMenu by remember { mutableStateOf(false) }
     var showAltSubMenu by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var showLegalDialog by remember { mutableStateOf(false) }
@@ -1205,72 +1209,101 @@ fun MainTopAppBar(viewModel: MapViewModel) {
             }
         },
         navigationIcon = {
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Einstellungen")
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Routing Option")
-                                Text(currentAltLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        },
-                        leadingIcon = { Icon(Icons.Default.Route, null) },
-                        trailingIcon = { Icon(Icons.Default.ChevronRight, null) },
-                        onClick = { showAltSubMenu = true }
-                    )
-
-                    HorizontalDivider()
-
-                    DropdownMenuItem(
-                        text = { Text("Farben") },
-                        leadingIcon = { Icon(Icons.Default.Palette, null) },
-                        onClick = {
-                            showColorDialog = true
-                            showMenu = false
-                        }
-                    )
-
-                    DropdownMenuItem(
-                        text = { Text("Hilfe") },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Help, null) },
-                        onClick = {
-                            showInfoDialog = true
-                            showMenu = false
-                        }
-                    )
-
-                    DropdownMenuItem(
-                        text = { Text("Rechtliches") },
-                        leadingIcon = { Icon(Icons.Default.Gavel, null) },
-                        onClick = {
-                            showLegalDialog = true
-                            showMenu = false
-                        }
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = showAltSubMenu,
-                    onDismissRequest = { showAltSubMenu = false }
-                ) {
-                    altOptions.forEach { (count, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Einstellungen")
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
                         DropdownMenuItem(
-                            text = { Text(label) },
-                            leadingIcon = {
-                                RadioButton(selected = viewModel.autoAltCount == count, onClick = null)
+                            text = {
+                                Column {
+                                    Text("Routing Option")
+                                    Text(currentAltLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             },
+                            leadingIcon = { Icon(Icons.Default.Route, null) },
+                            trailingIcon = { Icon(Icons.Default.ChevronRight, null) },
+                            onClick = { showAltSubMenu = true }
+                        )
+
+                        HorizontalDivider()
+
+                        DropdownMenuItem(
+                            text = { Text("Farben") },
+                            leadingIcon = { Icon(Icons.Default.Palette, null) },
                             onClick = {
-                                viewModel.updateAutoAltCount(count, context)
-                                showAltSubMenu = false
+                                showColorDialog = true
                                 showMenu = false
                             }
                         )
+
+                        DropdownMenuItem(
+                            text = { Text("Hilfe") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Help, null) },
+                            onClick = {
+                                showInfoDialog = true
+                                showMenu = false
+                            }
+                        )
+
+                        DropdownMenuItem(
+                            text = { Text("Rechtliches") },
+                            leadingIcon = { Icon(Icons.Default.Gavel, null) },
+                            onClick = {
+                                showLegalDialog = true
+                                showMenu = false
+                            }
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showAltSubMenu,
+                        onDismissRequest = { showAltSubMenu = false }
+                    ) {
+                        altOptions.forEach { (count, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                leadingIcon = {
+                                    RadioButton(selected = viewModel.autoAltCount == count, onClick = null)
+                                },
+                                onClick = {
+                                    viewModel.updateAutoAltCount(count, context)
+                                    showAltSubMenu = false
+                                    showMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Box {
+                    IconButton(onClick = { showProfileMenu = true }) {
+                        Icon(Icons.Default.DirectionsBike, contentDescription = "Routenprofil")
+                    }
+                    DropdownMenu(
+                        expanded = showProfileMenu,
+                        onDismissRequest = { showProfileMenu = false }
+                    ) {
+                        ROUTE_PROFILES.forEach { (id, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                leadingIcon = {
+                                    if (viewModel.bikeProfile == id) {
+                                        Icon(Icons.Default.Check, null)
+                                    } else {
+                                        Spacer(Modifier.width(24.dp))
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.updateProfile(id, context)
+                                    showProfileMenu = false
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -2209,18 +2242,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
     }
 
-    val profiles = listOf(
-        "fastbike" to "Rennrad",
-        "trekking" to "Trekking",
-        "mtb" to "MTB",
-        "shortest" to "Kürzeste",
-        "safety" to "Sicherste",
-        "hiking-mountain" to "Wandern",
-        "moped" to "Mofa/Moped"
-    )
-
-    var expandedProfile by remember { mutableStateOf(false) }
-    val currentProfileLabel = profiles.find { it.first == viewModel.bikeProfile }?.second ?: viewModel.bikeProfile
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -2387,41 +2408,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.End
                 ) {
                     val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
                     val isDirect = viewModel.bikeProfile == "direct"
                     val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
                     val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
-
-                    ExposedDropdownMenuBox(
-                        expanded = expandedProfile,
-                        onExpandedChange = { expandedProfile = !expandedProfile },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        OutlinedTextField(
-                            value = currentProfileLabel,
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedProfile) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth().height(56.dp),
-                            textStyle = MaterialTheme.typography.bodyMedium
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expandedProfile,
-                            onDismissRequest = { expandedProfile = false }
-                        ) {
-                            profiles.forEach { (id, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        viewModel.updateProfile(id, context)
-                                        expandedProfile = false
-                                    }
-                                )
-                            }
-                        }
-                    }
 
                     if (canFetchAlts) {
                         IconButton(
