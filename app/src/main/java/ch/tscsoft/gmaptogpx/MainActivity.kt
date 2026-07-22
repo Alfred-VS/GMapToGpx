@@ -2576,50 +2576,50 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                 if (viewModel.routeOptions.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
-                    MapPreview(
-                        options = viewModel.routeOptions,
-                        visibleRoutes = viewModel.visibleRoutes,
-                        currentProfile = viewModel.bikeProfile,
-                        colors = colors,
-                        mapType = viewModel.mapType,
-                        showWeather = viewModel.showWeather,
-                        selectedRouteIndex = pagerState.currentPage,
-                        highlightedRouteIndex = viewModel.highlightedRouteIndex,
-                        highlightedPointIndex = viewModel.highlightedPointIndex,
-                        userLocation = viewModel.userLocation,
-                        recordedPath = viewModel.recordedPath,
-                        centerOnUserRequested = viewModel.centerOnUserRequested,
-                        onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
-                        onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
-                        onRouteSelected = { index -> 
-                            scope.launch { pagerState.animateScrollToPage(index) }
-                        },
-                        onPointSelected = { rIdx, pIdx ->
-                            viewModel.setHighlight(rIdx, pIdx)
-                            scope.launch { pagerState.animateScrollToPage(rIdx) }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
-                        MapLayerSelector(
-                            currentType = viewModel.mapType,
-                            onTypeSelected = { viewModel.updateMapType(it) },
-                            modifier = Modifier.padding(end = 8.dp)
+                        MapPreview(
+                            options = viewModel.routeOptions,
+                            visibleRoutes = viewModel.visibleRoutes,
+                            currentProfile = viewModel.bikeProfile,
+                            colors = colors,
+                            mapType = viewModel.mapType,
+                            showWeather = viewModel.showWeather,
+                            selectedRouteIndex = pagerState.currentPage,
+                            highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                            highlightedPointIndex = viewModel.highlightedPointIndex,
+                            userLocation = viewModel.userLocation,
+                            recordedPath = viewModel.recordedPath,
+                            centerOnUserRequested = viewModel.centerOnUserRequested,
+                            onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                            onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
+                            onRouteSelected = { index ->
+                                scope.launch { pagerState.animateScrollToPage(index) }
+                            },
+                            onPointSelected = { rIdx, pIdx ->
+                                viewModel.setHighlight(rIdx, pIdx)
+                                scope.launch { pagerState.animateScrollToPage(rIdx) }
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
-                        SmallFloatingActionButton(
-                            onClick = { viewModel.toggleWeather() },
-                            modifier = Modifier.padding(end = 8.dp),
-                            containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                        ) {
-                            Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                        Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
+                            MapLayerSelector(
+                                currentType = viewModel.mapType,
+                                onTypeSelected = { viewModel.updateMapType(it) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.toggleWeather() },
+                                modifier = Modifier.padding(end = 8.dp),
+                                containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.isMapFullscreen = true },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                            }
                         }
-                        SmallFloatingActionButton(
-                            onClick = { viewModel.isMapFullscreen = true },
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                        ) {
-                            Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
-                        }
-                    }
                         Column(
                             modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
                             horizontalAlignment = Alignment.End
@@ -2725,9 +2725,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                                     style = MaterialTheme.typography.bodySmall)
 
-                                if (option.weatherSamples.isNotEmpty()) {
+                                /*if (option.weatherSamples.isNotEmpty()) {
                                     WeatherSummary(option.weatherSamples)
-                                }
+                                }*/
 
                                 if (option.altitudes.isNotEmpty()) {
                                     Spacer(Modifier.height(12.dp))
