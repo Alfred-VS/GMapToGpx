@@ -290,7 +290,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun fetchWeatherForRoute(option: RouteOption): RouteOption = withContext(Dispatchers.IO) {
-        if (option.points.isEmpty() || option.totalTimeSeconds == 0 && !option.isOriginal) return@withContext option
+        if (!showWeather || option.points.isEmpty() || (option.totalTimeSeconds == 0 && !option.isOriginal)) return@withContext option
         
         val samples = mutableListOf<WeatherSample>()
         val numSamples = 4 // Start, 1/3, 2/3, Ende
@@ -581,9 +581,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     status = "Route bereit!"
                     
                     // Fetch weather in background
-                    viewModelScope.launch {
-                        val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
-                        routeOptions = updatedOptions
+                    if (showWeather) {
+                        viewModelScope.launch {
+                            val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
+                            routeOptions = updatedOptions
+                        }
                     }
                 } else {
                     status = "Keine Koordinaten gefunden."
@@ -748,9 +750,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             lastSharedText = null
             
             // Fetch weather
-            viewModelScope.launch {
-                val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
-                routeOptions = updatedOptions
+            if (showWeather) {
+                viewModelScope.launch {
+                    val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
+                    routeOptions = updatedOptions
+                }
             }
         } else {
             status = "Keine Wegpunkte in GPX gefunden."
@@ -828,6 +832,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     fun clearCache() = tileCacheInterceptor.clearCache()
 
     fun getInterceptor(): TileCacheInterceptor = tileCacheInterceptor
+
+    fun updateShowWeather(show: Boolean, context: android.content.Context) {
+        showWeather = show
+        prefs?.edit()?.putBoolean("show_weather", show)?.apply()
+        refreshWeather(context)
+    }
 
     private fun getProfileLabel(id: String): String {
         return ROUTE_PROFILES.find { it.first == id }?.second ?: id
@@ -1067,11 +1077,13 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 status = "Alternativen geladen!"
 
                 // Fetch weather for new alternatives
-                viewModelScope.launch {
-                    val updatedOptions = routeOptions.map { 
-                        if (it.weatherSamples.isEmpty()) fetchWeatherForRoute(it) else it 
+                if (showWeather) {
+                    viewModelScope.launch {
+                        val updatedOptions = routeOptions.map {
+                            if (it.weatherSamples.isEmpty()) fetchWeatherForRoute(it) else it
+                        }
+                        routeOptions = updatedOptions
                     }
-                    routeOptions = updatedOptions
                 }
             } catch (e: Exception) {
                 status = "Fehler: ${e.localizedMessage ?: e.message}"
@@ -2679,10 +2691,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         SmallFloatingActionButton(
                             onClick = { 
                                 if (viewModel.showWeather) {
-                                    viewModel.showWeather = false
-                                    viewModel.refreshWeather(context)
+                                    viewModel.updateShowWeather(false, context)
                                 } else {
-                                    viewModel.showWeather = true
+                                    viewModel.updateShowWeather(true, context)
                                     showWeatherSettings = true 
                                 }
                             },
@@ -2791,10 +2802,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             SmallFloatingActionButton(
                                 onClick = { 
                                     if (viewModel.showWeather) {
-                                        viewModel.showWeather = false
-                                        viewModel.refreshWeather(context)
+                                        viewModel.updateShowWeather(false, context)
                                     } else {
-                                        viewModel.showWeather = true
+                                        viewModel.updateShowWeather(true, context)
                                         showWeatherSettings = true 
                                     }
                                 },
