@@ -179,6 +179,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     var highlightedRouteIndex by mutableStateOf<Int?>(null)
 
     var showWeather by mutableStateOf(true)
+    var weatherStartTime by mutableLongStateOf(System.currentTimeMillis())
 
     var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
     var recordedPath by mutableStateOf<List<Pair<Double, Double>>>(emptyList())
@@ -293,40 +294,65 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             val targetIdx = (fraction * (option.points.size - 1)).toInt()
             val point = option.points[targetIdx]
             val timeOffset = (fraction * option.totalTimeSeconds).toInt()
+            val absoluteTimeMillis = weatherStartTime + (timeOffset * 1000L)
             
             try {
-                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=${point.first}&longitude=${point.second}&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=1")
+                val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                val targetDateStr = sdfDate.format(Date(absoluteTimeMillis))
+                val targetHour = Calendar.getInstance().apply { timeInMillis = absoluteTimeMillis }.get(Calendar.HOUR_OF_DAY)
+
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=${point.first}&longitude=${point.second}&hourly=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&start_date=$targetDateStr&end_date=$targetDateStr&timezone=auto")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.connectTimeout = 5000
                 val text = connection.inputStream.bufferedReader().use { it.readText() }
                 val json = jsonParser.parseToJsonElement(text).jsonObject
-                val current = json["current"]?.jsonObject
+                val hourly = json["hourly"]?.jsonObject
                 
-                if (current != null) {
-                    val temp = current["temperature_2m"]?.jsonPrimitive?.double ?: 0.0
-                    val code = current["weather_code"]?.jsonPrimitive?.int ?: 0
-                    val wind = current["wind_speed_10m"]?.jsonPrimitive?.double ?: 0.0
-                    val windDir = current["wind_direction_10m"]?.jsonPrimitive?.double ?: 0.0
-                    val info = getWeatherInfo(code)
+                if (hourly != null) {
+                    val temps = hourly["temperature_2m"]?.jsonArray
+                    val codes = hourly["weather_code"]?.jsonArray
+                    val winds = hourly["wind_speed_10m"]?.jsonArray
+                    val windDirs = hourly["wind_direction_10m"]?.jsonArray
                     
-                    samples.add(WeatherSample(
-                        lat = point.first,
-                        lon = point.second,
-                        distanceIdx = targetIdx,
-                        timeOffsetSeconds = timeOffset,
-                        temp = temp,
-                        weatherCode = code,
-                        windSpeed = wind,
-                        windDirection = windDir,
-                        description = info.first,
-                        icon = info.second
-                    ))
+                    if (temps != null && targetHour < temps.size) {
+                        val temp = temps[targetHour].jsonPrimitive.double
+                        val code = codes?.get(targetHour)?.jsonPrimitive?.int ?: 0
+                        val wind = winds?.get(targetHour)?.jsonPrimitive?.double ?: 0.0
+                        val windDir = windDirs?.get(targetHour)?.jsonPrimitive?.double ?: 0.0
+                        val info = getWeatherInfo(code)
+                        
+                        samples.add(WeatherSample(
+                            lat = point.first,
+                            lon = point.second,
+                            distanceIdx = targetIdx,
+                            timeOffsetSeconds = timeOffset,
+                            temp = temp,
+                            weatherCode = code,
+                            windSpeed = wind,
+                            windDirection = windDir,
+                            description = info.first,
+                            icon = info.second
+                        ))
+                    }
                 }
             } catch (e: Exception) {
                 // Ignore single point errors
             }
         }
         option.copy(weatherSamples = samples)
+    }
+
+    fun refreshWeather(context: android.content.Context) {
+        if (!showWeather) {
+            routeOptions = routeOptions.map { it.copy(weatherSamples = emptyList()) }
+            return
+        }
+        viewModelScope.launch {
+            status = "Aktualisiere Wetter..."
+            val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
+            routeOptions = updatedOptions
+            status = "Wetter aktualisiert!"
+        }
     }
 
     fun saveRecordedPath(context: android.content.Context) {
@@ -455,11 +481,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     fun updateMapType(type: String) {
         mapType = type
         prefs?.edit()?.putString("map_type", type)?.apply()
-    }
-
-    fun toggleWeather() {
-        showWeather = !showWeather
-        prefs?.edit()?.putBoolean("show_weather", showWeather)?.apply()
     }
 
     fun toggleMapType() {
@@ -2096,6 +2117,125 @@ fun WeatherSummary(samples: List<WeatherSample>, modifier: Modifier = Modifier) 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun WeatherSettingsDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
+    var showWeatherLocal by remember { mutableStateOf(viewModel.showWeather) }
+    var selectedTimeMillis by remember { mutableLongStateOf(viewModel.weatherStartTime) }
+    
+    val context = LocalContext.current
+    val calendar = remember { Calendar.getInstance().apply { timeInMillis = selectedTimeMillis } }
+    
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
+    
+    val datePickerState = rememberDatePickerState(
+        initialSelectedDateMillis = selectedTimeMillis,
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                // Open-Meteo limit: approx 16 days
+                val now = System.currentTimeMillis()
+                val sixteenDays = 16L * 24 * 60 * 60 * 1000
+                return utcTimeMillis >= (now - 24 * 60 * 60 * 1000) && utcTimeMillis <= (now + sixteenDays)
+            }
+        }
+    )
+    
+    val timePickerState = rememberTimePickerState(
+        initialHour = calendar.get(Calendar.HOUR_OF_DAY),
+        initialMinute = calendar.get(Calendar.MINUTE),
+        is24Hour = true
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Wetter-Einstellungen") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = showWeatherLocal, onCheckedChange = { showWeatherLocal = it })
+                    Text("Wetter auf Karte anzeigen")
+                }
+                
+                if (showWeatherLocal) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Text("Startzeitpunkt der Tour:", style = MaterialTheme.typography.labelMedium)
+                    
+                    val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                    
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Event, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(sdf.format(Date(selectedTimeMillis)))
+                    }
+                    
+                    TextButton(
+                        onClick = { 
+                            selectedTimeMillis = System.currentTimeMillis()
+                        },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Jetzt")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                viewModel.showWeather = showWeatherLocal
+                viewModel.weatherStartTime = selectedTimeMillis
+                viewModel.refreshWeather(context)
+                onDismiss()
+            }) { Text("Übernehmen") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Abbrechen") }
+        }
+    )
+
+    if (showDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let {
+                        val newCal = Calendar.getInstance().apply { timeInMillis = it }
+                        calendar.set(Calendar.YEAR, newCal.get(Calendar.YEAR))
+                        calendar.set(Calendar.MONTH, newCal.get(Calendar.MONTH))
+                        calendar.set(Calendar.DAY_OF_MONTH, newCal.get(Calendar.DAY_OF_MONTH))
+                        selectedTimeMillis = calendar.timeInMillis
+                    }
+                    showDatePicker = false
+                    showTimePicker = true
+                }) { Text("OK") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    if (showTimePicker) {
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    calendar.set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+                    calendar.set(Calendar.MINUTE, timePickerState.minute)
+                    selectedTimeMillis = calendar.timeInMillis
+                    showTimePicker = false
+                }) { Text("OK") }
+            },
+            title = { Text("Uhrzeit wählen") },
+            text = {
+                TimePicker(state = timePickerState)
+            }
+        )
+    }
+}
+
 @Composable
 fun RouteDetailDialog(
     option: RouteOption,
@@ -2440,6 +2580,11 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     }
 
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
+    var showWeatherSettings by remember { mutableStateOf(false) }
+
+    if (showWeatherSettings) {
+        WeatherSettingsDialog(viewModel) { showWeatherSettings = false }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -2553,7 +2698,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         SmallFloatingActionButton(
-                            onClick = { viewModel.toggleWeather() },
+                            onClick = { showWeatherSettings = true },
                             modifier = Modifier.padding(end = 8.dp),
                             containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
@@ -2656,7 +2801,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 modifier = Modifier.padding(end = 8.dp)
                             )
                             SmallFloatingActionButton(
-                                onClick = { viewModel.toggleWeather() },
+                                onClick = { showWeatherSettings = true },
                                 modifier = Modifier.padding(end = 8.dp),
                                 containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                             ) {
@@ -2774,9 +2919,9 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                                     style = MaterialTheme.typography.bodySmall)
 
-                                /*if (option.weatherSamples.isNotEmpty()) {
+                                if (option.weatherSamples.isNotEmpty()) {
                                     WeatherSummary(option.weatherSamples)
-                                }*/
+                                }
 
                                 if (option.altitudes.isNotEmpty()) {
                                     Spacer(Modifier.height(12.dp))
