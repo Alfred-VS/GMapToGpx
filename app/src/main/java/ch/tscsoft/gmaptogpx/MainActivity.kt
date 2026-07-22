@@ -107,7 +107,21 @@ data class RouteOption(
     val elevationLoss: Int = 0,
     val totalTimeSeconds: Int = 0,
     val segments: List<RouteSegment> = emptyList(),
-    val surfaceSummary: Map<String, Double> = emptyMap()
+    val surfaceSummary: Map<String, Double> = emptyMap(),
+    val weatherSamples: List<WeatherSample> = emptyList()
+)
+
+data class WeatherSample(
+    val lat: Double,
+    val lon: Double,
+    val distanceIdx: Int,
+    val timeOffsetSeconds: Int,
+    val temp: Double,
+    val weatherCode: Int,
+    val windSpeed: Double,
+    val windDirection: Double = 0.0,
+    val description: String,
+    val icon: String // Emoji or icon name
 )
 
 data class BRouterResult(
@@ -162,6 +176,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     var highlightedPointIndex by mutableStateOf<Int?>(null)
     var highlightedRouteIndex by mutableStateOf<Int?>(null)
+
+    var showWeather by mutableStateOf(true)
 
     var userLocation by mutableStateOf<Pair<Double, Double>?>(null)
     var recordedPath by mutableStateOf<List<Pair<Double, Double>>>(emptyList())
@@ -237,6 +253,68 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         recordedPath = emptyList()
     }
 
+    private fun getWeatherInfo(code: Int): Pair<String, String> {
+        return when (code) {
+            0 -> "Klarer Himmel" to "☀️"
+            1, 2, 3 -> "Leicht bewölkt" to "🌤️"
+            45, 48 -> "Nebel" to "🌫️"
+            51, 53, 55 -> "Nieselregen" to "🌦️"
+            61, 63 -> "Leichter Regen" to "🌧️"
+            65 -> "Starker Regen" to "🌧️"
+            71, 73, 75 -> "Schneefall" to "❄️"
+            80, 81, 82 -> "Regenschauer" to "🌦️"
+            95, 96, 99 -> "Gewitter" to "⛈️"
+            else -> "Unbekannt" to "❓"
+        }
+    }
+
+    private suspend fun fetchWeatherForRoute(option: RouteOption): RouteOption = withContext(Dispatchers.IO) {
+        if (option.points.isEmpty() || option.totalTimeSeconds == 0 && !option.isOriginal) return@withContext option
+        
+        val samples = mutableListOf<WeatherSample>()
+        val numSamples = 4 // Start, 1/3, 2/3, Ende
+        
+        for (i in 0..numSamples) {
+            val fraction = i.toDouble() / numSamples
+            val targetIdx = (fraction * (option.points.size - 1)).toInt()
+            val point = option.points[targetIdx]
+            val timeOffset = (fraction * option.totalTimeSeconds).toInt()
+            
+            try {
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=${point.first}&longitude=${point.second}&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=1")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.connectTimeout = 5000
+                val text = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = jsonParser.parseToJsonElement(text).jsonObject
+                val current = json["current"]?.jsonObject
+                
+                if (current != null) {
+                    val temp = current["temperature_2m"]?.jsonPrimitive?.double ?: 0.0
+                    val code = current["weather_code"]?.jsonPrimitive?.int ?: 0
+                    val wind = current["wind_speed_10m"]?.jsonPrimitive?.double ?: 0.0
+                    val windDir = current["wind_direction_10m"]?.jsonPrimitive?.double ?: 0.0
+                    val info = getWeatherInfo(code)
+                    
+                    samples.add(WeatherSample(
+                        lat = point.first,
+                        lon = point.second,
+                        distanceIdx = targetIdx,
+                        timeOffsetSeconds = timeOffset,
+                        temp = temp,
+                        weatherCode = code,
+                        windSpeed = wind,
+                        windDirection = windDir,
+                        description = info.first,
+                        icon = info.second
+                    ))
+                }
+            } catch (e: Exception) {
+                // Ignore single point errors
+            }
+        }
+        option.copy(weatherSamples = samples)
+    }
+
     fun saveRecordedPath() {
         if (recordedPath.isEmpty()) return
         val gpx = createGpx(recordedPath)
@@ -255,6 +333,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             bikeProfile = prefs?.getString("bike_profile", "fastbike") ?: "fastbike"
             autoAltCount = prefs?.getInt("auto_alt_count", 0) ?: 0
             mapType = prefs?.getString("map_type", "standard") ?: "standard"
+            showWeather = prefs?.getBoolean("show_weather", true) ?: true
 
             colorMain = prefs?.getString("color_main", "#FF0000FF") ?: "#FF0000FF"
             colorAlt1 = prefs?.getString("color_alt1", "#FFFF00FF") ?: "#FFFF00FF"
@@ -355,6 +434,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         prefs?.edit()?.putString("map_type", type)?.apply()
     }
 
+    fun toggleWeather() {
+        showWeather = !showWeather
+        prefs?.edit()?.putBoolean("show_weather", showWeather)?.apply()
+    }
+
     fun toggleMapType() {
         mapType = when (mapType) {
             "standard" -> "topo"
@@ -437,6 +521,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     routeOptions = options
                     visibleRoutes = options.indices.toSet()
                     status = "Route bereit!"
+                    
+                    // Fetch weather in background
+                    viewModelScope.launch {
+                        val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
+                        routeOptions = updatedOptions
+                    }
                 } else {
                     status = "Keine Koordinaten gefunden."
                 }
@@ -587,6 +677,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             visibleRoutes = setOf(0)
             status = "$title geladen!"
             lastSharedText = null
+            
+            // Fetch weather
+            viewModelScope.launch {
+                val updatedOptions = routeOptions.map { fetchWeatherForRoute(it) }
+                routeOptions = updatedOptions
+            }
         } else {
             status = "Keine Wegpunkte in GPX gefunden."
         }
@@ -874,6 +970,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 routeOptions = currentOptions
                 visibleRoutes = currentOptions.indices.toSet()
                 status = "Alternativen geladen!"
+
+                // Fetch weather for new alternatives
+                viewModelScope.launch {
+                    val updatedOptions = routeOptions.map { 
+                        if (it.weatherSamples.isEmpty()) fetchWeatherForRoute(it) else it 
+                    }
+                    routeOptions = updatedOptions
+                }
             } catch (e: Exception) {
                 status = "Fehler: ${e.localizedMessage ?: e.message}"
             } finally {
@@ -1904,6 +2008,46 @@ fun SaveBookmarkDialog(
 }
 
 @Composable
+fun WeatherSummary(samples: List<WeatherSample>, modifier: Modifier = Modifier) {
+    if (samples.isEmpty()) return
+    
+    val start = samples.first()
+    val end = samples.last()
+    
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column {
+            Text("Wetter Start:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(start.icon, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.width(4.dp))
+                Text("${start.temp.toInt()}°C", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.width(8.dp))
+                Text("${start.windSpeed.toInt()} km/h", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        
+        if (samples.size > 1 && (start.weatherCode != end.weatherCode || Math.abs(start.temp - end.temp) > 3)) {
+            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            
+            Column(horizontalAlignment = Alignment.End) {
+                Text("Wetter Ziel:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${end.temp.toInt()}°C", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(4.dp))
+                    Text(end.icon, style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun RouteDetailDialog(
     option: RouteOption,
     viewModel: MapViewModel,
@@ -1929,6 +2073,10 @@ fun RouteDetailDialog(
                 
                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                     style = MaterialTheme.typography.bodySmall)
+
+                if (option.weatherSamples.isNotEmpty()) {
+                    WeatherSummary(option.weatherSamples)
+                }
 
                 val isSteep = option.segments.any { it.gradient > 15.0 }
                 if (isSteep) {
@@ -2321,46 +2469,54 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         if (viewModel.isMapFullscreen) {
             BackHandler { viewModel.isMapFullscreen = false }
             Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                MapPreview(
-                    options = viewModel.routeOptions,
-                    visibleRoutes = viewModel.visibleRoutes,
-                    currentProfile = viewModel.bikeProfile,
-                    colors = colors,
-                    mapType = viewModel.mapType,
-                    selectedRouteIndex = pagerState.currentPage,
-                    highlightedRouteIndex = viewModel.highlightedRouteIndex,
-                    highlightedPointIndex = viewModel.highlightedPointIndex,
-                    userLocation = viewModel.userLocation,
-                    recordedPath = viewModel.recordedPath,
-                    centerOnUserRequested = viewModel.centerOnUserRequested,
-                    onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
-                    onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
-                    onRouteSelected = { index -> 
-                        val option = viewModel.routeOptions.getOrNull(index)
-                        if (option != null) {
-                            selectedRouteForDialog = option
-                            scope.launch { pagerState.scrollToPage(index) }
-                        }
-                    },
-                    onPointSelected = { rIdx, pIdx ->
-                        viewModel.setHighlight(rIdx, pIdx)
-                        scope.launch { pagerState.scrollToPage(rIdx) }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-                Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
-                    MapLayerSelector(
-                        currentType = viewModel.mapType,
-                        onTypeSelected = { viewModel.updateMapType(it) },
-                        modifier = Modifier.padding(end = 8.dp)
+                    MapPreview(
+                        options = viewModel.routeOptions,
+                        visibleRoutes = viewModel.visibleRoutes,
+                        currentProfile = viewModel.bikeProfile,
+                        colors = colors,
+                        mapType = viewModel.mapType,
+                        showWeather = viewModel.showWeather,
+                        selectedRouteIndex = pagerState.currentPage,
+                        highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                        highlightedPointIndex = viewModel.highlightedPointIndex,
+                        userLocation = viewModel.userLocation,
+                        recordedPath = viewModel.recordedPath,
+                        centerOnUserRequested = viewModel.centerOnUserRequested,
+                        onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                        onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
+                        onRouteSelected = { index -> 
+                            val option = viewModel.routeOptions.getOrNull(index)
+                            if (option != null) {
+                                selectedRouteForDialog = option
+                                scope.launch { pagerState.scrollToPage(index) }
+                            }
+                        },
+                        onPointSelected = { rIdx, pIdx ->
+                            viewModel.setHighlight(rIdx, pIdx)
+                            scope.launch { pagerState.scrollToPage(rIdx) }
+                        },
+                        modifier = Modifier.fillMaxSize()
                     )
-                    SmallFloatingActionButton(
-                        onClick = { viewModel.isMapFullscreen = false },
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                    ) {
-                        Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                    Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
+                        MapLayerSelector(
+                            currentType = viewModel.mapType,
+                            onTypeSelected = { viewModel.updateMapType(it) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.toggleWeather() },
+                            modifier = Modifier.padding(end = 8.dp),
+                            containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.isMapFullscreen = false },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                        }
                     }
-                }
                 Column(
                     modifier = Modifier.padding(16.dp).align(Alignment.BottomEnd),
                     horizontalAlignment = Alignment.End
@@ -2420,42 +2576,50 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                 if (viewModel.routeOptions.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
-                        MapPreview(
-                            options = viewModel.routeOptions,
-                            visibleRoutes = viewModel.visibleRoutes,
-                            currentProfile = viewModel.bikeProfile,
-                            colors = colors,
-                            mapType = viewModel.mapType,
-                            selectedRouteIndex = pagerState.currentPage,
-                            highlightedRouteIndex = viewModel.highlightedRouteIndex,
-                            highlightedPointIndex = viewModel.highlightedPointIndex,
-                            userLocation = viewModel.userLocation,
-                            recordedPath = viewModel.recordedPath,
-                            centerOnUserRequested = viewModel.centerOnUserRequested,
-                            onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
-                            onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
-                            onRouteSelected = { index -> 
-                                scope.launch { pagerState.animateScrollToPage(index) }
-                            },
-                            onPointSelected = { rIdx, pIdx ->
-                                viewModel.setHighlight(rIdx, pIdx)
-                                scope.launch { pagerState.animateScrollToPage(rIdx) }
-                            },
-                            modifier = Modifier.fillMaxSize()
+                    MapPreview(
+                        options = viewModel.routeOptions,
+                        visibleRoutes = viewModel.visibleRoutes,
+                        currentProfile = viewModel.bikeProfile,
+                        colors = colors,
+                        mapType = viewModel.mapType,
+                        showWeather = viewModel.showWeather,
+                        selectedRouteIndex = pagerState.currentPage,
+                        highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                        highlightedPointIndex = viewModel.highlightedPointIndex,
+                        userLocation = viewModel.userLocation,
+                        recordedPath = viewModel.recordedPath,
+                        centerOnUserRequested = viewModel.centerOnUserRequested,
+                        onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                        onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
+                        onRouteSelected = { index -> 
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        },
+                        onPointSelected = { rIdx, pIdx ->
+                            viewModel.setHighlight(rIdx, pIdx)
+                            scope.launch { pagerState.animateScrollToPage(rIdx) }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
+                        MapLayerSelector(
+                            currentType = viewModel.mapType,
+                            onTypeSelected = { viewModel.updateMapType(it) },
+                            modifier = Modifier.padding(end = 8.dp)
                         )
-                        Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
-                            MapLayerSelector(
-                                currentType = viewModel.mapType,
-                                onTypeSelected = { viewModel.updateMapType(it) },
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            SmallFloatingActionButton(
-                                onClick = { viewModel.isMapFullscreen = true },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
-                            }
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.toggleWeather() },
+                            modifier = Modifier.padding(end = 8.dp),
+                            containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                         }
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.isMapFullscreen = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                        }
+                    }
                         Column(
                             modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
                             horizontalAlignment = Alignment.End
@@ -2561,6 +2725,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                                     style = MaterialTheme.typography.bodySmall)
 
+                                if (option.weatherSamples.isNotEmpty()) {
+                                    WeatherSummary(option.weatherSamples)
+                                }
+
                                 if (option.altitudes.isNotEmpty()) {
                                     Spacer(Modifier.height(12.dp))
                                     ElevationChart(
@@ -2645,6 +2813,7 @@ fun MapPreview(
     currentProfile: String,
     colors: List<String>,
     mapType: String = "standard",
+    showWeather: Boolean = true,
     selectedRouteIndex: Int = -1,
     highlightedRouteIndex: Int? = null,
     highlightedPointIndex: Int? = null,
@@ -2657,7 +2826,7 @@ fun MapPreview(
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(options, visibleRoutes, currentProfile, colors) {
+    val htmlContent = remember(options, visibleRoutes, currentProfile, colors, showWeather) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
@@ -2681,7 +2850,12 @@ fun MapPreview(
                 val m = (opt.totalTimeSeconds % 3600) / 60
                 if (h > 0) "${h}h ${m}min" else "${m}min"
             } else ""
-            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords], "isVisible":$isVisible,"isOriginal":${opt.isOriginal}}"""
+            
+            val weatherJson = if (showWeather) opt.weatherSamples.joinToString(",") { 
+                """{"lat":${it.lat},"lon":${it.lon},"icon":"${it.icon}","temp":"${it.temp.toInt()}°C","wind":"${it.windSpeed.toInt()}","dir":${it.windDirection}}"""
+            } else ""
+            
+            """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords], "isVisible":$isVisible,"isOriginal":${opt.isOriginal},"weather":[$weatherJson]}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
         """
@@ -2696,6 +2870,21 @@ fun MapPreview(
                 .leaflet-interactive { cursor: pointer; }
                 .route-label { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; pointer-events: auto !important; }
                 .label-inner { border: 1px solid #333; border-radius: 3px; padding: 1px 2px; font-size: 12px; line-height: 1.1; font-weight: bold; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.2); white-space: nowrap; }
+                .weather-icon { 
+                    font-size: 16px; 
+                    text-shadow: 0 0 3px white; 
+                    background: rgba(255,255,255,0.7); 
+                    border-radius: 4px; 
+                    padding: 2px;
+                    text-align: center; 
+                    border: 1px solid #999;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    min-width: 24px;
+                }
+                .wind-info { font-size: 9px; font-weight: bold; display: flex; align-items: center; }
+                .wind-arrow { display: inline-block; font-size: 12px; line-height: 1; }
             </style>
         </head>
         <body>
@@ -2751,6 +2940,7 @@ fun MapPreview(
                 var routesData = $jsonString;
                 var routeLayers = [];
                 var labelLayers = [];
+                var weatherMarkers = [];
                 var highlightMarker = null;
                 var userMarker = null;
                 var group = new L.featureGroup();
@@ -2814,6 +3004,9 @@ fun MapPreview(
                 }
 
                 function highlightRoute(selectedIndex) {
+                    weatherMarkers.forEach(function(m) { map.removeLayer(m); });
+                    weatherMarkers = [];
+
                     routeLayers.forEach(function(layer, index) {
                         var route = routesData[index];
                         if (!route.isVisible || !layer) return;
@@ -2823,7 +3016,31 @@ fun MapPreview(
                             opacity: isSelected ? 1.0 : (route.opacity * 0.7),
                             weight: isSelected ? 5 : ((index === 0 && !route.isOriginal) ? 4 : 2.5)
                         });
-                        if (isSelected) layer.bringToFront();
+                        if (isSelected) {
+                            layer.bringToFront();
+                            
+                            // Add weather markers for selected route
+                            if (route.weather && route.weather.length > 0) {
+                                route.weather.forEach(function(w) {
+                                    var arrow = '↑';
+                                    var content = '<div class="weather-icon">' +
+                                                  '<span>' + w.icon + ' ' + w.temp + '</span>' +
+                                                  '<div class="wind-info">' +
+                                                  '<span class="wind-arrow" style="transform: rotate(' + w.dir + 'deg);">' + arrow + '</span>' +
+                                                  '<span> ' + w.wind + '</span>' +
+                                                  '</div></div>';
+                                    
+                                    var icon = L.divIcon({
+                                        html: content,
+                                        className: 'weather-label',
+                                        iconSize: [40, 32],
+                                        iconAnchor: [20, 16]
+                                    });
+                                    var m = L.marker([w.lat, w.lon], { icon: icon, interactive: false }).addTo(map);
+                                    weatherMarkers.push(m);
+                                });
+                            }
+                        }
                         
                         var label = labelLayers[index];
                         if (label) {
@@ -2961,10 +3178,10 @@ fun MapPreview(
             
             if (lastState.html != htmlContent) {
                 webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
-                webView.tag = MapState(html = htmlContent, mapType = mapType, selectedRouteIndex = selectedRouteIndex, highlightedRouteIndex = highlightedRouteIndex, highlightedPointIndex = highlightedPointIndex)
+                webView.tag = MapState(html = htmlContent, mapType = mapType, showWeather = showWeather, selectedRouteIndex = selectedRouteIndex, highlightedRouteIndex = highlightedRouteIndex, highlightedPointIndex = highlightedPointIndex)
             } else {
-                if (lastState.mapType != mapType) {
-                    webView.evaluateJavascript("setMapType('$mapType')", null)
+                if (lastState.mapType != mapType || lastState.showWeather != showWeather) {
+                    webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 }
                 if (lastState.selectedRouteIndex != selectedRouteIndex) {
                     webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
@@ -2990,6 +3207,7 @@ fun MapPreview(
                 webView.tag = MapState(
                     html = htmlContent,
                     mapType = mapType,
+                    showWeather = showWeather,
                     selectedRouteIndex = selectedRouteIndex,
                     highlightedRouteIndex = highlightedRouteIndex,
                     highlightedPointIndex = highlightedPointIndex,
@@ -3009,6 +3227,7 @@ fun MapPreview(
 private data class MapState(
     val html: String = "",
     val mapType: String = "",
+    val showWeather: Boolean = true,
     val selectedRouteIndex: Int = -1,
     val highlightedRouteIndex: Int? = null,
     val highlightedPointIndex: Int? = null,
