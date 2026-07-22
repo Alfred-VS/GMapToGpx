@@ -1,5 +1,6 @@
 package ch.tscsoft.gmaptogpx
 
+import android.location.Geocoder
 import android.Manifest
 import android.app.Application
 import android.content.Intent
@@ -253,6 +254,19 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         recordedPath = emptyList()
     }
 
+    private fun getPlaceName(lat: Double, lon: Double, context: android.content.Context): String? {
+        return try {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            val addresses = geocoder.getFromLocation(lat, lon, 1)
+            if (!addresses.isNullOrEmpty()) {
+                val addr = addresses[0]
+                addr.locality ?: addr.subLocality ?: addr.adminArea ?: addr.thoroughfare
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun getWeatherInfo(code: Int): Pair<String, String> {
         return when (code) {
             0 -> "Klarer Himmel" to "☀️"
@@ -315,11 +329,20 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         option.copy(weatherSamples = samples)
     }
 
-    fun saveRecordedPath() {
+    fun saveRecordedPath(context: android.content.Context) {
         if (recordedPath.isEmpty()) return
-        val gpx = createGpx(recordedPath)
-        val title = "Aufzeichnung ${SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date())}"
-        saveBookmark(RouteOption(title, recordedPath, gpxContent = gpx), title)
+        
+        viewModelScope.launch {
+            val startName = withContext(Dispatchers.IO) { getPlaceName(recordedPath.first().first, recordedPath.first().second, context) }
+            val endName = withContext(Dispatchers.IO) { getPlaceName(recordedPath.last().first, recordedPath.last().second, context) }
+            val locTitle = if (startName != null && endName != null) "$startName -> $endName" else null
+            
+            val timeTitle = "Aufzeichnung ${SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date())}"
+            val finalTitle = if (locTitle != null) "$locTitle ($timeTitle)" else timeTitle
+            
+            val gpx = createGpx(recordedPath, trackName = finalTitle)
+            saveBookmark(RouteOption(finalTitle, recordedPath, gpxContent = gpx), finalTitle)
+        }
     }
 
     override fun onCleared() {
@@ -481,12 +504,17 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     lastPoints = points
                     val options = mutableListOf<RouteOption>()
                     val isBRouter = resolvedUrl.contains("brouter.de/brouter-web")
+
+                    val startName = withContext(Dispatchers.IO) { getPlaceName(points.first().first, points.first().second, context) }
+                    val endName = withContext(Dispatchers.IO) { getPlaceName(points.last().first, points.last().second, context) }
+                    val routeTitle = if (startName != null && endName != null) "$startName -> $endName" else null
                     
                     if (bikeProfile == "direct" || points.size < 2) {
                         // Nur die Original-Punkte anzeigen
-                        val googleGpx = createGpx(points)
+                        val title = routeTitle ?: "Importierte Punkte"
+                        val googleGpx = createGpx(points, trackName = title)
                         val dist = calculateDistance(points)
-                        options.add(RouteOption("Importierte Punkte", points, emptyList(), emptyList(), googleGpx, true, points, distanceMeters = dist))
+                        options.add(RouteOption(title, points, emptyList(), emptyList(), googleGpx, true, points, distanceMeters = dist))
                     } else if (isBRouter) {
                         // BRouter Link: Nur diese eine Route laden, keine Alternativen
                         val urlProfile = "profile=([^&]+)".toRegex().find(resolvedUrl)?.groupValues?.get(1)
@@ -495,7 +523,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         
                         status = "Lade BRouter Route ($profileName)..."
                         val result = getBikeRoute(points, effectiveProfile, 0)
-                        options.add(RouteOption("BRouter Import", result.points, result.altitudes, result.distances, createGpx(result.points, result.altitudes, result.segments), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds, segments = result.segments, surfaceSummary = createSurfaceSummary(result.segments)))
+                        val title = routeTitle ?: "BRouter Import"
+                        options.add(RouteOption(title, result.points, result.altitudes, result.distances, createGpx(result.points, result.altitudes, result.segments, trackName = title), inputPoints = points, alternativeIdx = 0, distanceMeters = result.distance, elevationGain = result.elevationGain, elevationLoss = result.elevationLoss, totalTimeSeconds = result.totalTimeSeconds, segments = result.segments, surfaceSummary = createSurfaceSummary(result.segments)))
                     } else {
                         val profileName = getProfileLabel(bikeProfile)
                         
@@ -503,8 +532,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         status = "Berechne $profileName..."
                         val mainResult = getBikeRoute(points, bikeProfile, 0)
                         val mainRoute = mainResult.points
+                        val mainTitle = routeTitle ?: "Hauptroute"
                         
-                        options.add(RouteOption("Hauptroute", mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute, mainResult.altitudes, mainResult.segments), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds, segments = mainResult.segments, surfaceSummary = createSurfaceSummary(mainResult.segments)))
+                        options.add(RouteOption(mainTitle, mainRoute, mainResult.altitudes, mainResult.distances, createGpx(mainRoute, mainResult.altitudes, mainResult.segments, trackName = mainTitle), inputPoints = points, alternativeIdx = 0, distanceMeters = mainResult.distance, elevationGain = mainResult.elevationGain, elevationLoss = mainResult.elevationLoss, totalTimeSeconds = mainResult.totalTimeSeconds, segments = mainResult.segments, surfaceSummary = createSurfaceSummary(mainResult.segments)))
                         
                         // Fetch Alternatives according to setting
                         for (i in 1..autoAltCount) {
@@ -513,7 +543,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                             val altRoute = altResult.points
                             // Nur hinzufügen, wenn sie sich von der Hauptroute und anderen Optionen unterscheidet
                             if (altRoute != mainRoute && altRoute != points && options.none { it.points == altRoute }) {
-                                options.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
+                                val altTitle = if (routeTitle != null) "Alt $i: $routeTitle" else "Alternative $i"
+                                options.add(RouteOption(altTitle, altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle), inputPoints = points, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                             }
                         }
                     }
@@ -563,7 +594,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun processGpxContent(gpxContent: String, title: String, context: android.content.Context) {
+    private suspend fun processGpxContent(gpxContent: String, title: String, context: android.content.Context) {
         val points = mutableListOf<Pair<Double, Double>>()
         val alts = mutableListOf<Double>()
         val surfaces = mutableListOf<String>()
@@ -608,6 +639,17 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         if (points.isNotEmpty()) {
             lastPoints = points
+
+            // Try to get a better title if the current one is generic
+            var finalTitle = title
+            if (title == "Importierte GPX" || title == "BRouter Import") {
+                val startName = withContext(Dispatchers.IO) { getPlaceName(points.first().first, points.first().second, context) }
+                val endName = withContext(Dispatchers.IO) { getPlaceName(points.last().first, points.last().second, context) }
+                if (startName != null && endName != null) {
+                    finalTitle = "$startName -> $endName"
+                }
+            }
+
             val dist = calculateDistance(points)
             
             var gain = 0.0
@@ -660,11 +702,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val option = RouteOption(
-                title = title,
+                title = finalTitle,
                 points = points,
                 altitudes = alts,
                 distances = distances,
-                gpxContent = gpxContent,
+                gpxContent = createGpx(points, alts, resSegments, trackName = finalTitle),
                 isOriginal = true,
                 inputPoints = points,
                 distanceMeters = dist,
@@ -675,7 +717,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             )
             routeOptions = listOf(option)
             visibleRoutes = setOf(0)
-            status = "$title geladen!"
+            status = "$finalTitle geladen!"
             lastSharedText = null
             
             // Fetch weather
@@ -736,7 +778,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadBookmark(bookmark: BookmarkRoute, context: android.content.Context) {
         initPrefs(context)
-        processGpxContent(bookmark.gpxContent, bookmark.title, context)
+        viewModelScope.launch {
+            processGpxContent(bookmark.gpxContent, bookmark.title, context)
+        }
     }
 
     private fun getProfileLabel(id: String): String {
@@ -945,7 +989,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun fetchAlternatives() {
+    fun fetchAlternatives(context: android.content.Context) {
         if (lastPoints.isEmpty() || isProcessing) return
         
         isProcessing = true
@@ -953,8 +997,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val currentOptions = routeOptions.toMutableList()
                 val profileName = getProfileLabel(bikeProfile)
-                val mainRoute = currentOptions.find { it.title == "Hauptroute" }?.points
+                val mainRoute = currentOptions.find { it.alternativeIdx == 0 && !it.isOriginal }?.points
                 
+                val startName = withContext(Dispatchers.IO) { getPlaceName(lastPoints.first().first, lastPoints.first().second, context) }
+                val endName = withContext(Dispatchers.IO) { getPlaceName(lastPoints.last().first, lastPoints.last().second, context) }
+                val routeTitle = if (startName != null && endName != null) "$startName -> $endName" else null
+
                 for (i in 1..3) {
                     // Skip if already loaded
                     if (currentOptions.any { it.alternativeIdx == i && !it.isOriginal }) continue
@@ -964,7 +1012,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     val altRoute = altResult.points
                     
                     if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
-                        currentOptions.add(RouteOption("Alternative $i", altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
+                        val altTitle = if (routeTitle != null) "Alt $i: $routeTitle" else "Alternative $i"
+                        currentOptions.add(RouteOption(altTitle, altRoute, altResult.altitudes, altResult.distances, createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = createSurfaceSummary(altResult.segments)))
                     }
                 }
                 routeOptions = currentOptions
@@ -1162,7 +1211,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         return sortedPoints.distinct()
     }
 
-    private fun createGpx(points: List<Pair<Double, Double>>, altitudes: List<Double>? = null, segments: List<RouteSegment>? = null): String {
+    private fun createGpx(points: List<Pair<Double, Double>>, altitudes: List<Double>? = null, segments: List<RouteSegment>? = null, trackName: String? = null): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
         sdf.timeZone = TimeZone.getTimeZone("UTC")
         val time = sdf.format(Date())
@@ -1177,7 +1226,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             val lat = String.format(Locale.US, "%.6f", p.first)
             val lon = String.format(Locale.US, "%.6f", p.second)
             sb.append("  <wpt lat=\"$lat\" lon=\"$lon\">\n")
-            sb.append("    <name>Google Maps Ort</name>\n")
+            sb.append("    <name>${trackName ?: "Google Maps Ort"}</name>\n")
             if (altitudes != null && altitudes.isNotEmpty()) {
                 sb.append("    <ele>${altitudes[0]}</ele>\n")
             }
@@ -1194,7 +1243,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             sb.append("  </wpt>\n")
         } else {
             sb.append("  <trk>\n")
-            sb.append("    <name>Google Maps Route</name>\n")
+            sb.append("    <name>${trackName ?: "Google Maps Route"}</name>\n")
             sb.append("    <trkseg>\n")
             for (i in points.indices) {
                 val p = points[i]
@@ -2530,7 +2579,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
                         }
                         SmallFloatingActionButton(
-                            onClick = { viewModel.saveRecordedPath() },
+                            onClick = { viewModel.saveRecordedPath(context) },
                             modifier = Modifier.padding(bottom = 8.dp),
                             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
@@ -2631,7 +2680,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                             if (canFetchAlts) {
                                 SmallFloatingActionButton(
-                                    onClick = { viewModel.fetchAlternatives() },
+                                    onClick = { viewModel.fetchAlternatives(context) },
                                     modifier = Modifier.padding(bottom = 8.dp),
                                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                                 ) {
@@ -2648,7 +2697,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                     Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
                                 }
                                 SmallFloatingActionButton(
-                                    onClick = { viewModel.saveRecordedPath() },
+                                    onClick = { viewModel.saveRecordedPath(context) },
                                     modifier = Modifier.padding(bottom = 8.dp),
                                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                                 ) {
