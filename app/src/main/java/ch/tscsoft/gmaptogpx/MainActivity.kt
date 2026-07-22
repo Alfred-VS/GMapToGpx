@@ -36,6 +36,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
@@ -144,6 +146,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: BookmarkRepository
     val allFolders: Flow<List<BookmarkFolder>>
     val rootBookmarks: Flow<List<BookmarkRoute>>
+
+    private val tileCacheInterceptor = TileCacheInterceptor(application)
+    private val mapDownloadManager = MapDownloadManager(application, tileCacheInterceptor)
+    val downloadProgress = mapDownloadManager.progress
 
     init {
         val db = BookmarkDatabase.getDatabase(application)
@@ -804,6 +810,25 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var downloadJob: kotlinx.coroutines.Job? = null
+
+    fun downloadMapForRoute(points: List<Pair<Double, Double>>) {
+        downloadJob?.cancel()
+        downloadJob = viewModelScope.launch {
+            mapDownloadManager.downloadRouteTiles(points, mapType)
+        }
+    }
+
+    fun cancelDownload() {
+        downloadJob?.cancel()
+        mapDownloadManager.cancelDownload()
+    }
+
+    fun getCacheSize(): Long = tileCacheInterceptor.getCacheSize()
+    fun clearCache() = tileCacheInterceptor.clearCache()
+
+    fun getInterceptor(): TileCacheInterceptor = tileCacheInterceptor
+
     private fun getProfileLabel(id: String): String {
         return ROUTE_PROFILES.find { it.first == id }?.second ?: id
     }
@@ -1362,6 +1387,7 @@ fun MainTopAppBar(viewModel: MapViewModel) {
     var showLegalDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
     var showBookmarksDialog by remember { mutableStateOf(false) }
+    var showOfflineDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val altOptions = listOf(0 to "Nur Hauptroute", 1 to "+1 Alternative", 2 to "+2 Alternativen", 3 to "+3 Alternativen")
@@ -1402,6 +1428,15 @@ fun MainTopAppBar(viewModel: MapViewModel) {
                             leadingIcon = { Icon(Icons.Default.Route, null) },
                             trailingIcon = { Icon(Icons.Default.ChevronRight, null) },
                             onClick = { showAltSubMenu = true }
+                        )
+
+                        DropdownMenuItem(
+                            text = { Text("Offline Karten") },
+                            leadingIcon = { Icon(Icons.Default.Map, null) },
+                            onClick = {
+                                showOfflineDialog = true
+                                showMenu = false
+                            }
                         )
 
                         HorizontalDivider()
@@ -1490,6 +1525,10 @@ fun MainTopAppBar(viewModel: MapViewModel) {
 
     if (showBookmarksDialog) {
         BookmarksDialog(viewModel) { showBookmarksDialog = false }
+    }
+
+    if (showOfflineDialog) {
+        OfflineMapsDialog(viewModel) { showOfflineDialog = false }
     }
 
     if (showInfoDialog) {
@@ -2236,33 +2275,22 @@ fun RouteDetailDialog(
         },
         confirmButton = {},
         dismissButton = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row (horizontalArrangement = Arrangement.spacedBy(8.dp)){
-                    OutlinedButton(
-                        onClick = { showSaveDialog = true },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(18.dp))
-                        Text(" Sichern", style = MaterialTheme.typography.labelMedium)
-                    }
-
-                    OutlinedButton(
-                        onClick = onEdit,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
-                        Text(" Edit", style = MaterialTheme.typography.labelMedium)
-                    }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedIconButton(onClick = { showSaveDialog = true }) {
+                    Icon(Icons.Default.BookmarkAdd, contentDescription = "Sichern")
                 }
-                Button(
-                    onClick = onShare,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) {
-                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
-                    Text(" Teilen", style = MaterialTheme.typography.labelMedium)
+                OutlinedIconButton(onClick = { viewModel.downloadMapForRoute(option.points) }) {
+                    Icon(Icons.Default.Download, contentDescription = "Offline")
+                }
+                OutlinedIconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Language, contentDescription = "Edit")
+                }
+                FilledIconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, contentDescription = "Teilen")
                 }
             }
         }
@@ -2523,6 +2551,8 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { viewModel.routeOptions.size })
 
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
+
     val colors = remember(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal) {
         listOf(viewModel.colorMain, viewModel.colorAlt1, viewModel.colorAlt2, viewModel.colorAlt3, viewModel.colorOriginal)
     }
@@ -2616,6 +2646,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         visibleRoutes = viewModel.visibleRoutes,
                         currentProfile = viewModel.bikeProfile,
                         colors = colors,
+                        interceptor = viewModel.getInterceptor(),
                         mapType = viewModel.mapType,
                         showWeather = viewModel.showWeather,
                         selectedRouteIndex = pagerState.currentPage,
@@ -2731,6 +2762,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             visibleRoutes = viewModel.visibleRoutes,
                             currentProfile = viewModel.bikeProfile,
                             colors = colors,
+                            interceptor = viewModel.getInterceptor(),
                             mapType = viewModel.mapType,
                             showWeather = viewModel.showWeather,
                             selectedRouteIndex = pagerState.currentPage,
@@ -2895,33 +2927,22 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 }
                                 
                                 Spacer(Modifier.height(16.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-
-                                    OutlinedButton(
-                                        onClick = { showSaveDialog = true },
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 8.dp)
-                                    ) {
-                                        Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(18.dp))
-                                        Text(" Sichern", style = MaterialTheme.typography.labelMedium)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedIconButton(onClick = { showSaveDialog = true }) {
+                                        Icon(Icons.Default.BookmarkAdd, contentDescription = "Sichern")
                                     }
-
-                                    OutlinedButton(
-                                        onClick = { onPreview(option) },
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 8.dp)
-                                    ) {
-                                        Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp))
-                                        Text(" Edit", style = MaterialTheme.typography.labelMedium)
+                                    OutlinedIconButton(onClick = { viewModel.downloadMapForRoute(option.points) }) {
+                                        Icon(Icons.Default.Download, contentDescription = "Offline")
                                     }
-
-                                    Button(
-                                        onClick = { scope.launch { viewModel.shareGpx(option, context) } },
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 8.dp)
-                                    ) {
-                                        Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
-                                        Text(" Teilen", style = MaterialTheme.typography.labelMedium)
+                                    OutlinedIconButton(onClick = { onPreview(option) }) {
+                                        Icon(Icons.Default.Language, contentDescription = "Edit")
+                                    }
+                                    FilledIconButton(onClick = { scope.launch { viewModel.shareGpx(option, context) } }) {
+                                        Icon(Icons.Default.Share, contentDescription = "Teilen")
                                     }
                                 }
                             }
@@ -2957,6 +2978,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 }
             }
         }
+
+        if (downloadProgress.isDownloading) {
+            DownloadProgressOverlay(downloadProgress, onCancel = { viewModel.cancelDownload() })
+        }
     }
 }
 
@@ -2967,6 +2992,7 @@ fun MapPreview(
     visibleRoutes: Set<Int>,
     currentProfile: String,
     colors: List<String>,
+    interceptor: TileCacheInterceptor,
     mapType: String = "standard",
     showWeather: Boolean = true,
     selectedRouteIndex: Int = -1,
@@ -3321,7 +3347,11 @@ fun MapPreview(
                     @android.webkit.JavascriptInterface
                     fun selectUserPosition() { onUserPositionSelected() }
                 }, "Android")
-                webViewClient = WebViewClient()
+                webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                        return request?.url?.toString()?.let { interceptor.handleRequest(it) }
+                    }
+                }
                 setOnTouchListener { v, event ->
                     if (event.action == android.view.MotionEvent.ACTION_DOWN) { v.parent.requestDisallowInterceptTouchEvent(true) }
                     false
@@ -3399,3 +3429,104 @@ private data class MapState(
     val userLng: Double? = null,
     val recordedPath: List<Pair<Double, Double>> = emptyList()
 )
+
+@Composable
+fun DownloadProgressOverlay(progress: DownloadProgress, onCancel: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .pointerInput(Unit) {},
+        contentAlignment = Alignment.Center
+    ) {
+        ElevatedCard(
+            modifier = Modifier
+                .width(280.dp)
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator(
+                    progress = { if (progress.total > 0) progress.current.toFloat() / progress.total else 0f },
+                    modifier = Modifier.size(64.dp)
+                )
+                Text(
+                    "Karten werden geladen...",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "${progress.current} / ${progress.total} Kacheln",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                TextButton(onClick = onCancel) {
+                    Text("Abbrechen", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OfflineMapsDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
+    var cacheSize by remember { mutableLongStateOf(viewModel.getCacheSize()) }
+    var showConfirmClear by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Offline Karten") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    "Die App speichert automatisch Kacheln der angezeigten Karten. " +
+                            "Zusätzlich können Kacheln für eine Route vorab geladen werden.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                ListItem(
+                    headlineContent = { Text("Belegter Speicher") },
+                    supportingContent = {
+                        val sizeMb = String.format(Locale.US, "%.1f MB", cacheSize / (1024.0 * 1024.0))
+                        Text(sizeMb)
+                    },
+                    leadingContent = { Icon(Icons.Default.Storage, null) }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Schließen") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = { showConfirmClear = true },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Cache löschen")
+            }
+        }
+    )
+
+    if (showConfirmClear) {
+        AlertDialog(
+            onDismissRequest = { showConfirmClear = false },
+            title = { Text("Cache löschen?") },
+            text = { Text("Alle heruntergeladenen Kartenkacheln werden unwiderruflich gelöscht.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearCache()
+                        cacheSize = viewModel.getCacheSize()
+                        showConfirmClear = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Löschen") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmClear = false }) { Text("Abbrechen") }
+            }
+        )
+    }
+}
