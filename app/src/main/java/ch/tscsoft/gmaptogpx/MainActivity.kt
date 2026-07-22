@@ -2077,45 +2077,6 @@ fun SaveBookmarkDialog(
     )
 }
 
-@Composable
-fun WeatherSummary(samples: List<WeatherSample>, modifier: Modifier = Modifier) {
-    if (samples.isEmpty()) return
-    
-    val start = samples.first()
-    val end = samples.last()
-    
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text("Wetter Start:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(start.icon, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.width(4.dp))
-                Text("${start.temp.toInt()}°C", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.width(8.dp))
-                Text("${start.windSpeed.toInt()} km/h", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        
-        if (samples.size > 1 && (start.weatherCode != end.weatherCode || Math.abs(start.temp - end.temp) > 3)) {
-            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            
-            Column(horizontalAlignment = Alignment.End) {
-                Text("Wetter Ziel:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${end.temp.toInt()}°C", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.width(4.dp))
-                    Text(end.icon, style = MaterialTheme.typography.titleMedium)
-                }
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2253,9 +2214,6 @@ fun RouteDetailDialog(
                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                     style = MaterialTheme.typography.bodySmall)
 
-                if (option.weatherSamples.isNotEmpty()) {
-                    WeatherSummary(option.weatherSamples)
-                }
 
                 val isSteep = option.segments.any { it.gradient > 15.0 }
                 if (isSteep) {
@@ -2925,9 +2883,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 Text("➜ $km ▲$anstieg ▼$abstieg${if(timeText.isNotEmpty()) " \uD83D\uDD57 $timeText" else ""}",
                                     style = MaterialTheme.typography.bodySmall)
 
-                                if (option.weatherSamples.isNotEmpty()) {
-                                    WeatherSummary(option.weatherSamples)
-                                }
 
                                 if (option.altitudes.isNotEmpty()) {
                                     Spacer(Modifier.height(12.dp))
