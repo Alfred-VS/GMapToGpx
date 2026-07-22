@@ -2736,10 +2736,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         val option = viewModel.routeOptions[page]
                         val routeColorHex = when {
                             option.isOriginal -> viewModel.colorOriginal
-                            option.title == "Hauptroute" -> viewModel.colorMain
-                            option.title == "Alternative 1" -> viewModel.colorAlt1
-                            option.title == "Alternative 2" -> viewModel.colorAlt2
-                            option.title == "Alternative 3" -> viewModel.colorAlt3
+                            option.alternativeIdx == 0 -> viewModel.colorMain
+                            option.alternativeIdx == 1 -> viewModel.colorAlt1
+                            option.alternativeIdx == 2 -> viewModel.colorAlt2
+                            option.alternativeIdx == 3 -> viewModel.colorAlt3
                             else -> viewModel.colorAlt3
                         }
                         val routeColor = try { Color(android.graphics.Color.parseColor(routeColorHex)) } catch (e: Exception) { Color.Gray }
@@ -2882,10 +2882,10 @@ fun MapPreview(
             
             val argbHex = when {
                 opt.isOriginal -> colors[4]
-                opt.title == "Hauptroute" -> colors[0]
-                opt.title == "Alternative 1" -> colors[1]
-                opt.title == "Alternative 2" -> colors[2]
-                opt.title == "Alternative 3" -> colors[3]
+                opt.alternativeIdx == 0 -> colors[0]
+                opt.alternativeIdx == 1 -> colors[1]
+                opt.alternativeIdx == 2 -> colors[2]
+                opt.alternativeIdx == 3 -> colors[3]
                 else -> colors[3]
             }
 
