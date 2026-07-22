@@ -2875,7 +2875,7 @@ fun MapPreview(
     onPointSelected: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(options, visibleRoutes, currentProfile, colors, showWeather) {
+    val htmlContent = remember(options, visibleRoutes, currentProfile, colors, showWeather, mapType) {
         val jsonString = options.mapIndexed { index, opt ->
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
@@ -3226,19 +3226,28 @@ fun MapPreview(
             val lastState = webView.tag as? MapState ?: MapState()
             
             if (lastState.html != htmlContent) {
-                webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
-                webView.tag = MapState(html = htmlContent, mapType = mapType, showWeather = showWeather, selectedRouteIndex = selectedRouteIndex, highlightedRouteIndex = highlightedRouteIndex, highlightedPointIndex = highlightedPointIndex)
-            } else {
-                if (lastState.mapType != mapType || lastState.showWeather != showWeather) {
+                // If the only change is mapType, we can use JS for a smoother transition
+                val onlyMapTypeChanged = lastState.html.isNotEmpty() && 
+                    lastState.showWeather == showWeather && 
+                    lastState.mapType != mapType &&
+                    // Check if html is same except for the mapType variable and initialization
+                    lastState.html.replace("var currentMapType = '${lastState.mapType}';", "var currentMapType = '$mapType';")
+                                  .replace("if ('${lastState.mapType}' === 'satellite')", "if ('$mapType' === 'satellite')")
+                                  .replace("if ('${lastState.mapType}' === 'topo')", "if ('$mapType' === 'topo')")
+                                  .replace("if ('${lastState.mapType}' === 'cycle')", "if ('$mapType' === 'cycle')") == htmlContent
+
+                if (onlyMapTypeChanged) {
+                    webView.evaluateJavascript("setMapType('$mapType')", null)
+                } else {
                     webView.loadDataWithBaseURL("https://brouter.de", htmlContent, "text/html", "UTF-8", null)
                 }
+            } else {
                 if (lastState.selectedRouteIndex != selectedRouteIndex) {
                     webView.evaluateJavascript("highlightRoute($selectedRouteIndex)", null)
                 }
                 
                 val lat = userLocation?.first
                 val lng = userLocation?.second
-                // Always update location if it changed, center if requested
                 if (lastState.userLat != lat || lastState.userLng != lng || centerOnUserRequested) {
                     webView.evaluateJavascript("setUserLocation(${lat ?: "null"}, ${lng ?: "null"}, $centerOnUserRequested)", null)
                 }
@@ -3251,23 +3260,23 @@ fun MapPreview(
                     val pointsJson = recordedPath.joinToString(",", prefix = "[", postfix = "]") { "[${it.first},${it.second}]" }
                     webView.evaluateJavascript("setRecordedPath($pointsJson)", null)
                 }
+            }
 
-                // Update the tag with new state
-                webView.tag = MapState(
-                    html = htmlContent,
-                    mapType = mapType,
-                    showWeather = showWeather,
-                    selectedRouteIndex = selectedRouteIndex,
-                    highlightedRouteIndex = highlightedRouteIndex,
-                    highlightedPointIndex = highlightedPointIndex,
-                    userLat = lat,
-                    userLng = lng,
-                    recordedPath = recordedPath
-                )
+            // Always update the tag with current state
+            webView.tag = MapState(
+                html = htmlContent,
+                mapType = mapType,
+                showWeather = showWeather,
+                selectedRouteIndex = selectedRouteIndex,
+                highlightedRouteIndex = highlightedRouteIndex,
+                highlightedPointIndex = highlightedPointIndex,
+                userLat = userLocation?.first,
+                userLng = userLocation?.second,
+                recordedPath = recordedPath
+            )
 
-                if (centerOnUserRequested) {
-                    onCenterOnUserHandled()
-                }
+            if (centerOnUserRequested) {
+                onCenterOnUserHandled()
             }
         }
     )
