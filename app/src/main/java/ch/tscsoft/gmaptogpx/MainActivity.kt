@@ -2120,7 +2120,6 @@ fun WeatherSummary(samples: List<WeatherSample>, modifier: Modifier = Modifier) 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WeatherSettingsDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
-    var showWeatherLocal by remember { mutableStateOf(viewModel.showWeather) }
     var selectedTimeMillis by remember { mutableLongStateOf(viewModel.weatherStartTime) }
     
     val context = LocalContext.current
@@ -2149,50 +2148,41 @@ fun WeatherSettingsDialog(viewModel: MapViewModel, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Wetter-Einstellungen") },
+        title = { Text("Wetter-Zeitpunkt") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = showWeatherLocal, onCheckedChange = { showWeatherLocal = it })
-                    Text("Wetter auf Karte anzeigen")
+                Text("Startzeitpunkt der Tour:", style = MaterialTheme.typography.labelMedium)
+                
+                val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                
+                OutlinedButton(
+                    onClick = { showDatePicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Event, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(sdf.format(Date(selectedTimeMillis)))
                 }
                 
-                if (showWeatherLocal) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    Text("Startzeitpunkt der Tour:", style = MaterialTheme.typography.labelMedium)
-                    
-                    val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-                    
-                    OutlinedButton(
-                        onClick = { showDatePicker = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Event, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(sdf.format(Date(selectedTimeMillis)))
-                    }
-                    
-                    TextButton(
-                        onClick = { 
-                            selectedTimeMillis = System.currentTimeMillis()
-                        },
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Text("Jetzt")
-                    }
+                TextButton(
+                    onClick = { 
+                        selectedTimeMillis = System.currentTimeMillis()
+                    },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Jetzt")
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                viewModel.showWeather = showWeatherLocal
                 viewModel.weatherStartTime = selectedTimeMillis
                 viewModel.refreshWeather(context)
                 onDismiss()
             }) { Text("Übernehmen") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Abbrechen") }
+            TextButton(onClick = onDismiss) { Text("Schließen") }
         }
     )
 
@@ -2698,7 +2688,15 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         SmallFloatingActionButton(
-                            onClick = { showWeatherSettings = true },
+                            onClick = { 
+                                if (viewModel.showWeather) {
+                                    viewModel.showWeather = false
+                                    viewModel.refreshWeather(context)
+                                } else {
+                                    viewModel.showWeather = true
+                                    showWeatherSettings = true 
+                                }
+                            },
                             modifier = Modifier.padding(end = 8.dp),
                             containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
@@ -2801,7 +2799,15 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 modifier = Modifier.padding(end = 8.dp)
                             )
                             SmallFloatingActionButton(
-                                onClick = { showWeatherSettings = true },
+                                onClick = { 
+                                    if (viewModel.showWeather) {
+                                        viewModel.showWeather = false
+                                        viewModel.refreshWeather(context)
+                                    } else {
+                                        viewModel.showWeather = true
+                                        showWeatherSettings = true 
+                                    }
+                                },
                                 modifier = Modifier.padding(end = 8.dp),
                                 containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                             ) {
