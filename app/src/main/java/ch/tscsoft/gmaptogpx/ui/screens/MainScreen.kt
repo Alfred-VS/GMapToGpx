@@ -120,6 +120,10 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.updateLocation(context, centerOnUser = true)
+    }
+
     LaunchedEffect(pagerState.currentPage) {
         if (viewModel.highlightedRouteIndex != pagerState.currentPage) {
             viewModel.setHighlight(null, null)
@@ -349,139 +353,137 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (viewModel.routeOptions.isNotEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
-                        MapPreview(
-                            options = viewModel.routeOptions,
-                            visibleRoutes = viewModel.visibleRoutes,
-                            colors = colors,
-                            interceptor = viewModel.getInterceptor(),
-                            mapType = viewModel.mapType,
-                            showWeather = viewModel.showWeather,
-                            selectedRouteIndex = pagerState.currentPage,
-                            highlightedRouteIndex = viewModel.highlightedRouteIndex,
-                            highlightedPointIndex = viewModel.highlightedPointIndex,
-                            userLocation = viewModel.userLocation,
-                            recordedPath = viewModel.recordedPath,
-                            centerOnUserRequested = viewModel.centerOnUserRequested,
-                            onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
-                            onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
-                            onRouteSelected = { index ->
-                                scope.launch { pagerState.animateScrollToPage(index) }
-                            },
-                            onPointSelected = { rIdx, pIdx ->
-                                viewModel.setHighlight(rIdx, pIdx)
-                                scope.launch { pagerState.animateScrollToPage(rIdx) }
-                            },
-                            waypoints = viewModel.waypoints,
-                            pois = viewModel.activePois,
-                            onMapLongClick = { lat, lon -> viewModel.addWaypoint(lat, lon, context) },
-                            onPoiClick = { viewModel.addWaypoint(it.lat, it.lon, context) },
-                            onMapBoundsChanged = { s, w, n, e -> viewModel.refreshPois(s, w, n, e) },
-                            onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
-                            modifier = Modifier.fillMaxSize()
+                Box(modifier = Modifier.fillMaxWidth().height(mapHeight).clip(MaterialTheme.shapes.medium)) {
+                    MapPreview(
+                        options = viewModel.routeOptions,
+                        visibleRoutes = viewModel.visibleRoutes,
+                        colors = colors,
+                        interceptor = viewModel.getInterceptor(),
+                        mapType = viewModel.mapType,
+                        showWeather = viewModel.showWeather,
+                        selectedRouteIndex = pagerState.currentPage,
+                        highlightedRouteIndex = viewModel.highlightedRouteIndex,
+                        highlightedPointIndex = viewModel.highlightedPointIndex,
+                        userLocation = viewModel.userLocation,
+                        recordedPath = viewModel.recordedPath,
+                        centerOnUserRequested = viewModel.centerOnUserRequested,
+                        onCenterOnUserHandled = { viewModel.centerOnUserRequested = false },
+                        onUserPositionSelected = { viewModel.highlightNearestPointToUser(pagerState.currentPage) },
+                        onRouteSelected = { index ->
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        },
+                        onPointSelected = { rIdx, pIdx ->
+                            viewModel.setHighlight(rIdx, pIdx)
+                            scope.launch { pagerState.animateScrollToPage(rIdx) }
+                        },
+                        waypoints = viewModel.waypoints,
+                        pois = viewModel.activePois,
+                        onMapLongClick = { lat, lon -> viewModel.addWaypoint(lat, lon, context) },
+                        onPoiClick = { viewModel.addWaypoint(it.lat, it.lon, context) },
+                        onMapBoundsChanged = { s, w, n, e -> viewModel.refreshPois(s, w, n, e) },
+                        onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
+                        MapLayerSelector(
+                            currentType = viewModel.mapType,
+                            onTypeSelected = { viewModel.updateMapType(it) },
+                            modifier = Modifier.padding(end = 8.dp)
                         )
-                        Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
-                            MapLayerSelector(
-                                currentType = viewModel.mapType,
-                                onTypeSelected = { viewModel.updateMapType(it) },
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            SmallFloatingActionButton(
-                                onClick = { 
-                                    if (viewModel.showWeather) {
-                                        viewModel.updateShowWeather(false, context)
-                                    } else {
-                                        viewModel.updateShowWeather(true, context)
-                                        showWeatherSettings = true 
-                                    }
-                                },
-                                modifier = Modifier.padding(end = 8.dp),
-                                containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                            }
-                            SmallFloatingActionButton(
-                                onClick = { viewModel.isMapFullscreen = true },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
-                            }
-                        }
-                        Column(
-                            modifier = Modifier.padding(8.dp).align(Alignment.CenterStart),
-                            horizontalAlignment = Alignment.Start
+                        SmallFloatingActionButton(
+                            onClick = { 
+                                if (viewModel.showWeather) {
+                                    viewModel.updateShowWeather(false, context)
+                                } else {
+                                    viewModel.updateShowWeather(true, context)
+                                    showWeatherSettings = true 
+                                }
+                            },
+                            modifier = Modifier.padding(end = 8.dp),
+                            containerColor = if (viewModel.showWeather) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
-                            SmallFloatingActionButton(
-                                onClick = { showPoiSettings = true },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.PinDrop, contentDescription = "POI Einstellungen")
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            SmallFloatingActionButton(
-                                onClick = { showWaypointsSheet = true },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.List, contentDescription = "Wegpunkte")
-                            }
+                            Icon(Icons.Default.Cloud, contentDescription = "Wetter umschalten", tint = if (viewModel.showWeather) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                         }
-                        Column(
-                            modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
-                            horizontalAlignment = Alignment.End
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.isMapFullscreen = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
-                            val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
-                            val isDirect = viewModel.bikeProfile == "direct"
-                            val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
-                            val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
-
-                            if (canFetchAlts) {
-                                SmallFloatingActionButton(
-                                    onClick = { viewModel.fetchAlternatives(context) },
-                                    modifier = Modifier.padding(bottom = 8.dp),
-                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                                ) {
-                                    Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-
-                            if (viewModel.recordedPath.isNotEmpty()) {
-                                SmallFloatingActionButton(
-                                    onClick = { viewModel.clearRecordedPath() },
-                                    modifier = Modifier.padding(bottom = 8.dp),
-                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                                ) {
-                                    Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
-                                }
-                                SmallFloatingActionButton(
-                                    onClick = { viewModel.saveRecordedPath(context) },
-                                    modifier = Modifier.padding(bottom = 8.dp),
-                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                                ) {
-                                    Icon(Icons.Default.Save, contentDescription = "Aufzeichnung speichern", tint = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-                            SmallFloatingActionButton(
-                                onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
-                                modifier = Modifier.padding(bottom = 8.dp),
-                                containerColor = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(
-                                    if (viewModel.isFollowMode) Icons.Default.Navigation else Icons.Default.Explore, 
-                                    contentDescription = "Routen folgen",
-                                    tint = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            SmallFloatingActionButton(
-                                onClick = { onMyLocationClick() },
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                            ) {
-                                Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
-                            }
+                            Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
                         }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Column(
+                        modifier = Modifier.padding(8.dp).align(Alignment.CenterStart),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        SmallFloatingActionButton(
+                            onClick = { showPoiSettings = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.PinDrop, contentDescription = "POI Einstellungen")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        SmallFloatingActionButton(
+                            onClick = { showWaypointsSheet = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = "Wegpunkte")
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.padding(8.dp).align(Alignment.BottomEnd),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+                        val isDirect = viewModel.bikeProfile == "direct"
+                        val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+                        val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
+
+                        if (canFetchAlts) {
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.fetchAlternatives(context) },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+
+                        if (viewModel.recordedPath.isNotEmpty()) {
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.clearRecordedPath() },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.DeleteSweep, contentDescription = "Aufzeichnung löschen", tint = MaterialTheme.colorScheme.error)
+                            }
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.saveRecordedPath(context) },
+                                modifier = Modifier.padding(bottom = 8.dp),
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Save, contentDescription = "Aufzeichnung speichern", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.toggleFollowMode(context, pagerState.currentPage) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            containerColor = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(
+                                if (viewModel.isFollowMode) Icons.Default.Navigation else Icons.Default.Explore, 
+                                contentDescription = "Routen folgen",
+                                tint = if (viewModel.isFollowMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { onMyLocationClick() },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.MyLocation, contentDescription = "Mein Standort")
+                        }
+                    }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
 
                 if (viewModel.routeOptions.isNotEmpty()) {
                     HorizontalPager(

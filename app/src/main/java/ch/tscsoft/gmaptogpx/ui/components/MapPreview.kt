@@ -107,7 +107,7 @@ fun MapPreview(
         <body>
             <div id="map"></div>
             <script>
-                var map = L.map('map');
+                var map = L.map('map').setView([0, 0], 2);
                 
                 var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
                 var topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)' });
@@ -162,7 +162,10 @@ fun MapPreview(
                             userMarker = L.circleMarker(pos, { radius: 7, color: 'white', weight: 2, opacity: 1, fillColor: '#3880ff', fillOpacity: 1, interactive: true }).addTo(map);
                             userMarker.on('click', function() { if (window.Android) window.Android.selectUserPosition(); });
                         }
-                        userMarker.bringToFront(); if (center) map.panTo(pos);
+                        userMarker.bringToFront(); 
+                        if (center) {
+                            map.setView(pos, 15);
+                        }
                     } else if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
                 };
 
@@ -227,7 +230,15 @@ fun MapPreview(
                     routeLayers.push(polyline); labelLayers.push(tooltip); group.addLayer(polyline);
                 });
 
-                if (group.getLayers().length > 0) { setTimeout(function() { map.invalidateSize(); map.fitBounds(group.getBounds().pad(0.1)); highlightRoute($selectedRouteIndex); }, 200); }
+                if (group.getLayers().length > 0) {
+                    setTimeout(function() { 
+                        map.invalidateSize(); 
+                        map.fitBounds(group.getBounds().pad(0.1)); 
+                        highlightRoute($selectedRouteIndex);
+                    }, 200);
+                } else {
+                    setTimeout(function() { map.invalidateSize(); }, 200);
+                }
             </script>
         </body>
         </html>
