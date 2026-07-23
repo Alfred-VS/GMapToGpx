@@ -49,9 +49,54 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 
     var selectedRouteForDialog by remember { mutableStateOf<RouteOption?>(null) }
     var showWeatherSettings by remember { mutableStateOf(false) }
+    var showPoiSettings by remember { mutableStateOf(false) }
+    var showWaypointsSheet by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedSuggestion by remember { mutableStateOf<ch.tscsoft.gmaptogpx.data.models.SearchSuggestion?>(null) }
 
     if (showWeatherSettings) {
         WeatherSettingsDialog(viewModel) { showWeatherSettings = false }
+    }
+
+    if (selectedSuggestion != null) {
+        ch.tscsoft.gmaptogpx.ui.dialogs.WaypointTypeDialog(
+            suggestion = selectedSuggestion!!,
+            onSetStart = {
+                viewModel.setStartPoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
+                selectedSuggestion = null
+                searchQuery = ""
+            },
+            onSetEnd = {
+                viewModel.setEndPoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
+                selectedSuggestion = null
+                searchQuery = ""
+            },
+            onAddIntermediate = {
+                viewModel.addIntermediateWaypoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
+                selectedSuggestion = null
+                searchQuery = ""
+            },
+            onDismiss = { selectedSuggestion = null }
+        )
+    }
+
+    if (showPoiSettings) {
+        ch.tscsoft.gmaptogpx.ui.dialogs.PoiSettingsDialog(
+            enabledTypes = viewModel.enabledPoiTypes,
+            onToggleType = { viewModel.togglePoiType(it) },
+            onDismiss = { showPoiSettings = false }
+        )
+    }
+
+    if (showWaypointsSheet) {
+        ModalBottomSheet(onDismissRequest = { showWaypointsSheet = false }) {
+            WaypointList(
+                waypoints = viewModel.waypoints,
+                onDelete = { viewModel.removeWaypoint(it) },
+                onMove = { from, to -> viewModel.moveWaypoint(from, to) },
+                onClearAll = { viewModel.clearWaypoints() }
+            )
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -97,6 +142,28 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         } else {
             minMapHeight to minChartHeight
         }
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (!viewModel.isMapFullscreen) {
+                SearchBar(
+                    query = searchQuery,
+                    onQueryChange = { 
+                        searchQuery = it
+                        viewModel.performSearch(it)
+                    },
+                    suggestions = viewModel.searchSuggestions,
+                    onSuggestionSelected = { 
+                        selectedSuggestion = it
+                    }
+                )
+            }
+            
+            // ... the rest of the existing content but MapPreview needs updated props
+        }
+
+        // Wait, I should wrap the existing logic in the column or box.
+        // Actually, the existing logic is a Column with scroll. 
+        // I'll replace the whole MapPreview calls.
 
         fun onPreview(option: RouteOption) {
             val inputPoints = option.inputPoints.ifEmpty { option.points }
@@ -157,6 +224,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             viewModel.setHighlight(rIdx, pIdx)
                             scope.launch { pagerState.scrollToPage(rIdx) }
                         },
+                        waypoints = viewModel.waypoints,
+                        pois = viewModel.activePois,
+                        onMapLongClick = { lat, lon -> viewModel.addWaypoint(lat, lon, context) },
+                        onPoiClick = { viewModel.addWaypoint(it.lat, it.lon, context) },
+                        onMapBoundsChanged = { s, w, n, e -> viewModel.refreshPois(s, w, n, e) },
+                        onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                         modifier = Modifier.fillMaxSize()
                     )
                     Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
@@ -184,6 +257,24 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         ) {
                             Icon(Icons.Default.FullscreenExit, contentDescription = "Vollbild beenden")
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.padding(16.dp).align(Alignment.CenterStart),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        SmallFloatingActionButton(
+                            onClick = { showPoiSettings = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.PinDrop, contentDescription = "POI Einstellungen")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        SmallFloatingActionButton(
+                            onClick = { showWaypointsSheet = true },
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = "Wegpunkte")
                         }
                     }
                 Column(
@@ -226,11 +317,26 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                 }
             }
         } else {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (!viewModel.isMapFullscreen) {
+                SearchBar(
+                    query = searchQuery,
+                    onQueryChange = { 
+                        searchQuery = it
+                        viewModel.performSearch(it)
+                    },
+                    suggestions = viewModel.searchSuggestions,
+                    onSuggestionSelected = { 
+                        selectedSuggestion = it
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -267,6 +373,12 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 viewModel.setHighlight(rIdx, pIdx)
                                 scope.launch { pagerState.animateScrollToPage(rIdx) }
                             },
+                            waypoints = viewModel.waypoints,
+                            pois = viewModel.activePois,
+                            onMapLongClick = { lat, lon -> viewModel.addWaypoint(lat, lon, context) },
+                            onPoiClick = { viewModel.addWaypoint(it.lat, it.lon, context) },
+                            onMapBoundsChanged = { s, w, n, e -> viewModel.refreshPois(s, w, n, e) },
+                            onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                             modifier = Modifier.fillMaxSize()
                         )
                         Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
@@ -294,6 +406,24 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                             ) {
                                 Icon(Icons.Default.Fullscreen, contentDescription = "Vollbild")
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.padding(8.dp).align(Alignment.CenterStart),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            SmallFloatingActionButton(
+                                onClick = { showPoiSettings = true },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.PinDrop, contentDescription = "POI Einstellungen")
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            SmallFloatingActionButton(
+                                onClick = { showWaypointsSheet = true },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.List, contentDescription = "Wegpunkte")
                             }
                         }
                         Column(

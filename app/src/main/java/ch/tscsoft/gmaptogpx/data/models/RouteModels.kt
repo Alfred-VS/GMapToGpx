@@ -40,6 +40,35 @@ data class RouteOption(
     val weatherSamples: List<WeatherSample> = emptyList()
 )
 
+data class Waypoint(
+    val lat: Double,
+    val lon: Double,
+    val address: String? = null
+)
+
+data class SearchSuggestion(
+    val name: String,
+    val description: String,
+    val lat: Double,
+    val lon: Double
+)
+
+data class Poi(
+    val id: Long,
+    val name: String,
+    val type: PoiType,
+    val lat: Double,
+    val lon: Double
+)
+
+enum class PoiType(val label: String, val icon: String, val query: String) {
+    DRINKING_WATER("Trinkwasser", "🚰", "node[\"amenity\"=\"drinking_water\"]"),
+    BIKE_SHOP("Fahrradladen", "🚲", "node[\"shop\"=\"bicycle\"]"),
+    SHELTER("Unterstand", "🏠", "node[\"amenity\"=\"shelter\"]"),
+    BENCH("Bank", "🪑", "node[\"amenity\"=\"bench\"]"),
+    TOILETS("WC", "🚻", "node[\"amenity\"=\"toilets\"]")
+}
+
 data class WeatherSample(
     val lat: Double,
     val lon: Double,

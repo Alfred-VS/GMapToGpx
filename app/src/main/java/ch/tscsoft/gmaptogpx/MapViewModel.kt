@@ -12,6 +12,8 @@ import androidx.lifecycle.viewModelScope
 import ch.tscsoft.gmaptogpx.data.*
 import ch.tscsoft.gmaptogpx.data.models.*
 import ch.tscsoft.gmaptogpx.data.remote.BRouterService
+import ch.tscsoft.gmaptogpx.data.remote.GeocodingService
+import ch.tscsoft.gmaptogpx.data.remote.PoiService
 import ch.tscsoft.gmaptogpx.data.remote.WeatherService
 import ch.tscsoft.gmaptogpx.util.GpxUtil
 import ch.tscsoft.gmaptogpx.util.LocationUtil
@@ -35,7 +37,9 @@ class MapViewModel @Inject constructor(
     private val bRouterService: BRouterService,
     private val weatherService: WeatherService,
     private val mapDownloadManager: MapDownloadManager,
-    private val tileCacheInterceptor: TileCacheInterceptor
+    private val tileCacheInterceptor: TileCacheInterceptor,
+    private val geocodingService: GeocodingService,
+    private val poiService: PoiService
 ) : ViewModel() {
 
     private var prefs: SharedPreferences? = null
@@ -45,6 +49,19 @@ class MapViewModel @Inject constructor(
     val allFolders: Flow<List<BookmarkFolder>> = repository.allFolders
     val rootBookmarks: Flow<List<BookmarkRoute>> = repository.rootBookmarks
     val downloadProgress = mapDownloadManager.progress
+
+    // --- New Feature State ---
+    var waypoints by mutableStateOf<List<Waypoint>>(emptyList())
+        private set
+    var searchSuggestions by mutableStateOf<List<SearchSuggestion>>(emptyList())
+        private set
+    var activePois by mutableStateOf<List<Poi>>(emptyList())
+        private set
+    var enabledPoiTypes by mutableStateOf<Set<PoiType>>(emptySet())
+        private set
+    var searchJob: Job? = null
+    var poiJob: Job? = null
+    // -------------------------
 
     var status by mutableStateOf("Warte auf Google Maps Link...")
         private set
@@ -84,6 +101,176 @@ class MapViewModel @Inject constructor(
 
     private var fusedLocationClient: FusedLocationProviderClient? = null
     private var locationCallback: LocationCallback? = null
+
+    // --- New Feature Methods ---
+    fun addWaypoint(lat: Double, lon: Double, context: Context, index: Int? = null) {
+        viewModelScope.launch {
+            val address = withContext(Dispatchers.IO) { LocationUtil.getFullAddress(lat, lon, context) }
+            val newWaypoints = waypoints.toMutableList()
+            val waypoint = Waypoint(lat, lon, address)
+            if (index != null && index in newWaypoints.indices) {
+                newWaypoints.add(index, waypoint)
+            } else {
+                newWaypoints.add(waypoint)
+            }
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    fun removeWaypoint(index: Int) {
+        if (index in waypoints.indices) {
+            val newWaypoints = waypoints.toMutableList()
+            newWaypoints.removeAt(index)
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    fun moveWaypoint(from: Int, to: Int) {
+        if (from in waypoints.indices && to in waypoints.indices) {
+            val newWaypoints = waypoints.toMutableList()
+            val item = newWaypoints.removeAt(from)
+            newWaypoints.add(to, item)
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    fun updateWaypoint(index: Int, lat: Double, lon: Double, context: Context) {
+        if (index in waypoints.indices) {
+            viewModelScope.launch {
+                val address = withContext(Dispatchers.IO) { LocationUtil.getFullAddress(lat, lon, context) }
+                val newWaypoints = waypoints.toMutableList()
+                newWaypoints[index] = Waypoint(lat, lon, address)
+                waypoints = newWaypoints
+                calculateRouteFromWaypoints()
+            }
+        }
+    }
+
+    fun clearWaypoints() {
+        waypoints = emptyList()
+        routeOptions = emptyList()
+        status = "Warte auf Google Maps Link oder neue Punkte..."
+    }
+
+    fun setStartPoint(lat: Double, lon: Double, context: Context) {
+        viewModelScope.launch {
+            val address = withContext(Dispatchers.IO) { LocationUtil.getFullAddress(lat, lon, context) }
+            val newWaypoints = waypoints.toMutableList()
+            val waypoint = Waypoint(lat, lon, address)
+            if (newWaypoints.isEmpty()) {
+                newWaypoints.add(waypoint)
+            } else {
+                newWaypoints[0] = waypoint
+            }
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    fun setEndPoint(lat: Double, lon: Double, context: Context) {
+        viewModelScope.launch {
+            val address = withContext(Dispatchers.IO) { LocationUtil.getFullAddress(lat, lon, context) }
+            val newWaypoints = waypoints.toMutableList()
+            newWaypoints.add(Waypoint(lat, lon, address))
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    fun addIntermediateWaypoint(lat: Double, lon: Double, context: Context) {
+        viewModelScope.launch {
+            val address = withContext(Dispatchers.IO) { LocationUtil.getFullAddress(lat, lon, context) }
+            val newWaypoints = waypoints.toMutableList()
+            val waypoint = Waypoint(lat, lon, address)
+            if (newWaypoints.size >= 2) {
+                newWaypoints.add(newWaypoints.size - 1, waypoint)
+            } else {
+                newWaypoints.add(waypoint)
+            }
+            waypoints = newWaypoints
+            calculateRouteFromWaypoints()
+        }
+    }
+
+    private fun calculateRouteFromWaypoints() {
+        if (waypoints.size < 2) {
+            routeOptions = emptyList()
+            return
+        }
+
+        isProcessing = true
+        status = "Berechne Route..."
+        viewModelScope.launch {
+            try {
+                val coords = waypoints.map { it.lat to it.lon }
+                val mainResult = bRouterService.getBikeRoute(coords, bikeProfile, 0)
+                val options = mutableListOf<RouteOption>()
+                
+                val title = "Manuelle Route"
+                options.add(RouteOption(
+                    title = title,
+                    points = mainResult.points,
+                    altitudes = mainResult.altitudes,
+                    distances = mainResult.distances,
+                    gpxContent = GpxUtil.createGpx(mainResult.points, mainResult.altitudes, mainResult.segments, trackName = title),
+                    inputPoints = coords,
+                    alternativeIdx = 0,
+                    distanceMeters = mainResult.distance,
+                    elevationGain = mainResult.elevationGain,
+                    elevationLoss = mainResult.elevationLoss,
+                    totalTimeSeconds = mainResult.totalTimeSeconds,
+                    segments = mainResult.segments,
+                    surfaceSummary = bRouterService.createSurfaceSummary(mainResult.segments)
+                ))
+                
+                routeOptions = options
+                visibleRoutes = setOf(0)
+                status = "Route berechnet!"
+                
+                if (showWeather) {
+                    val updatedOptions = routeOptions.map { weatherService.fetchWeatherForRoute(it, showWeather, weatherStartTime) }
+                    routeOptions = updatedOptions
+                }
+            } catch (e: Exception) {
+                status = "Fehler: ${e.localizedMessage}"
+            } finally {
+                isProcessing = false
+            }
+        }
+    }
+
+    fun performSearch(query: String) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            delay(500)
+            searchSuggestions = geocodingService.search(query)
+        }
+    }
+
+    fun togglePoiType(type: PoiType) {
+        enabledPoiTypes = if (enabledPoiTypes.contains(type)) {
+            enabledPoiTypes - type
+        } else {
+            enabledPoiTypes + type
+        }
+        // Force refresh if we have a bbox (this needs to be triggered from UI when map moves)
+    }
+
+    fun refreshPois(south: Double, west: Double, north: Double, east: Double) {
+        if (enabledPoiTypes.isEmpty()) {
+            activePois = emptyList()
+            return
+        }
+        poiJob?.cancel()
+        poiJob = viewModelScope.launch {
+            delay(1000)
+            activePois = poiService.getPois(south, west, north, east, enabledPoiTypes)
+        }
+    }
+    // ----------------------------
 
     fun updateLocation(context: Context, centerOnUser: Boolean = false, highlightOnRoute: Int? = null) {
         val client = fusedLocationClient ?: LocationServices.getFusedLocationProviderClient(context).also { fusedLocationClient = it }
@@ -320,6 +507,10 @@ class MapViewModel @Inject constructor(
 
                 if (points.isNotEmpty()) {
                     lastPoints = points
+                    // Convert points to waypoints with addresses
+                    waypoints = points.map { 
+                        Waypoint(it.first, it.second, LocationUtil.getFullAddress(it.first, it.second, context))
+                    }
                     val options = mutableListOf<RouteOption>()
                     val isBRouter = resolvedUrl.contains("brouter.de/brouter-web")
 
