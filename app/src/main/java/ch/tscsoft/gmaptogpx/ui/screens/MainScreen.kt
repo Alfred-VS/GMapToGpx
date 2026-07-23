@@ -285,6 +285,21 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(16.dp).align(Alignment.BottomEnd),
                     horizontalAlignment = Alignment.End
                 ) {
+                    val hasAllAlts = viewModel.routeOptions.count { !it.isOriginal && it.alternativeIdx > 0 } >= 3
+                    val isDirect = viewModel.bikeProfile == "direct"
+                    val isBRouterImport = viewModel.debugUrl?.contains("brouter.de/brouter-web") == true
+                    val canFetchAlts = viewModel.routeOptions.isNotEmpty() && !viewModel.isProcessing && !hasAllAlts && !isDirect && !isBRouterImport
+
+                    if (canFetchAlts) {
+                        SmallFloatingActionButton(
+                            onClick = { viewModel.fetchAlternatives(context) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        ) {
+                            Icon(Icons.Default.Route, contentDescription = "Alternativen berechnen", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+
                     if (viewModel.recordedPath.isNotEmpty()) {
                         SmallFloatingActionButton(
                             onClick = { viewModel.clearRecordedPath() },

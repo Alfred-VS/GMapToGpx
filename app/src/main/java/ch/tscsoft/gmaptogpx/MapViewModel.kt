@@ -206,6 +206,7 @@ class MapViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val coords = waypoints.map { it.lat to it.lon }
+                lastPoints = coords
                 val mainResult = bRouterService.getBikeRoute(coords, bikeProfile, 0)
                 val options = mutableListOf<RouteOption>()
                 
@@ -225,10 +226,36 @@ class MapViewModel @Inject constructor(
                     segments = mainResult.segments,
                     surfaceSummary = bRouterService.createSurfaceSummary(mainResult.segments)
                 ))
+
+                // Add automatic alternatives if autoAltCount > 0
+                val profileName = getProfileLabel(bikeProfile)
+                for (i in 1..autoAltCount) {
+                    status = "Berechne $profileName Alternative $i..."
+                    val altResult = bRouterService.getBikeRoute(coords, bikeProfile, i)
+                    val altRoute = altResult.points
+                    if (altRoute != mainResult.points && altRoute != coords && options.none { it.points == altRoute }) {
+                        val altTitle = "Alternative $i"
+                        options.add(RouteOption(
+                            title = altTitle,
+                            points = altRoute,
+                            altitudes = altResult.altitudes,
+                            distances = altResult.distances,
+                            gpxContent = GpxUtil.createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle),
+                            inputPoints = coords,
+                            alternativeIdx = i,
+                            distanceMeters = altResult.distance,
+                            elevationGain = altResult.elevationGain,
+                            elevationLoss = altResult.elevationLoss,
+                            totalTimeSeconds = altResult.totalTimeSeconds,
+                            segments = altResult.segments,
+                            surfaceSummary = bRouterService.createSurfaceSummary(altResult.segments)
+                        ))
+                    }
+                }
                 
                 routeOptions = options
-                visibleRoutes = setOf(0)
-                status = "Route berechnet!"
+                visibleRoutes = options.indices.toSet()
+                status = if (options.size > 1) "Route mit Alternativen berechnet!" else "Route berechnet!"
                 
                 if (showWeather) {
                     val updatedOptions = routeOptions.map { weatherService.fetchWeatherForRoute(it, showWeather, weatherStartTime) }
