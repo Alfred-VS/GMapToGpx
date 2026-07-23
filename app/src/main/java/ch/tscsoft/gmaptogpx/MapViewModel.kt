@@ -60,6 +60,7 @@ class MapViewModel @Inject constructor(
         private set
     var enabledPoiTypes by mutableStateOf<Set<PoiType>>(emptySet())
         private set
+    var showRoutePlanner by mutableStateOf(false)
     var searchJob: Job? = null
     var poiJob: Job? = null
     // -------------------------

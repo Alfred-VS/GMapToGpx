@@ -51,34 +51,15 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     var showWeatherSettings by remember { mutableStateOf(false) }
     var showPoiSettings by remember { mutableStateOf(false) }
     var showWaypointsSheet by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedSuggestion by remember { mutableStateOf<ch.tscsoft.gmaptogpx.data.models.SearchSuggestion?>(null) }
+
+    if (viewModel.showRoutePlanner) {
+        ch.tscsoft.gmaptogpx.ui.dialogs.RoutePlannerDialog(viewModel) { viewModel.showRoutePlanner = false }
+    }
 
     if (showWeatherSettings) {
         WeatherSettingsDialog(viewModel) { showWeatherSettings = false }
     }
 
-    if (selectedSuggestion != null) {
-        ch.tscsoft.gmaptogpx.ui.dialogs.WaypointTypeDialog(
-            suggestion = selectedSuggestion!!,
-            onSetStart = {
-                viewModel.setStartPoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
-                selectedSuggestion = null
-                searchQuery = ""
-            },
-            onSetEnd = {
-                viewModel.setEndPoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
-                selectedSuggestion = null
-                searchQuery = ""
-            },
-            onAddIntermediate = {
-                viewModel.addIntermediateWaypoint(selectedSuggestion!!.lat, selectedSuggestion!!.lon, context)
-                selectedSuggestion = null
-                searchQuery = ""
-            },
-            onDismiss = { selectedSuggestion = null }
-        )
-    }
 
     if (showPoiSettings) {
         ch.tscsoft.gmaptogpx.ui.dialogs.PoiSettingsDialog(
@@ -148,30 +129,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
-            if (!viewModel.isMapFullscreen) {
-                SearchBar(
-                    query = searchQuery,
-                    onQueryChange = { 
-                        searchQuery = it
-                        viewModel.performSearch(it)
-                    },
-                    suggestions = viewModel.searchSuggestions,
-                    onSuggestionSelected = { 
-                        selectedSuggestion = it
-                    },
-                    onUseCurrentLocation = {
-                        viewModel.userLocation?.let { loc ->
-                            selectedSuggestion = ch.tscsoft.gmaptogpx.data.models.SearchSuggestion(
-                                name = "Meine Position",
-                                description = "Aktueller Standort",
-                                lat = loc.first,
-                                lon = loc.second
-                            )
-                        }
-                    }
-                )
-            }
-            
             // ... the rest of the existing content but MapPreview needs updated props
         }
 
@@ -360,31 +317,6 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (!viewModel.isMapFullscreen) {
-                SearchBar(
-                    query = searchQuery,
-                    onQueryChange = { 
-                        searchQuery = it
-                        viewModel.performSearch(it)
-                    },
-                    suggestions = viewModel.searchSuggestions,
-                    onSuggestionSelected = { 
-                        selectedSuggestion = it
-                    },
-                    onUseCurrentLocation = {
-                        viewModel.userLocation?.let { loc ->
-                            selectedSuggestion = ch.tscsoft.gmaptogpx.data.models.SearchSuggestion(
-                                name = "Meine Position",
-                                description = "Aktueller Standort",
-                                lat = loc.first,
-                                lon = loc.second
-                            )
-                        }
-                    },
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
             if (viewModel.routeOptions.isEmpty() || viewModel.isProcessing) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = viewModel.status, style = MaterialTheme.typography.bodyMedium)

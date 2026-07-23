@@ -16,8 +16,11 @@ import ch.tscsoft.gmaptogpx.ui.dialogs.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainTopAppBar(viewModel: MapViewModel) {
+fun MainTopAppBar(
+    viewModel: MapViewModel
+) {
     var showMenu by remember { mutableStateOf(false) }
+    // ...
     var showProfileMenu by remember { mutableStateOf(false) }
     var showAltSubMenu by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -38,6 +41,9 @@ fun MainTopAppBar(viewModel: MapViewModel) {
             )
         },
         actions = {
+            IconButton(onClick = { viewModel.showRoutePlanner = true }) {
+                Icon(Icons.Default.Search, contentDescription = "Route planen")
+            }
             IconButton(onClick = { showBookmarksDialog = true }) {
                 Icon(Icons.Default.Bookmarks, contentDescription = "Bookmarks")
             }
