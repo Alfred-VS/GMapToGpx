@@ -152,7 +152,14 @@ class MapViewModel @Inject constructor(
     fun clearWaypoints() {
         waypoints = emptyList()
         routeOptions = emptyList()
+        visibleRoutes = emptySet()
+        lastPoints = emptyList()
+        lastSharedText = null
+        debugUrl = null
+        highlightedPointIndex = null
+        highlightedRouteIndex = null
         status = "Warte auf Google Maps Link oder neue Punkte..."
+        centerOnUserRequested = true
     }
 
     fun setStartPoint(lat: Double, lon: Double, context: Context) {

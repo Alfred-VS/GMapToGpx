@@ -55,6 +55,7 @@ fun MapPreview(
     
     val htmlContent = remember(options, visibleRoutes, colors, showWeather, mapType) {
         val jsonString = options.mapIndexed { index, opt ->
+            // ... (keep existing route json logic)
             val isVisible = visibleRoutes.contains(index)
             val coords = if (isVisible) opt.points.joinToString(",") { "[${it.first},${it.second}]" } else ""
             
@@ -85,6 +86,10 @@ fun MapPreview(
             """{"index":$index, "km":"$km", "time":"$timeText", "color":"$rgbHex", "opacity":$opacity, "points":[$coords], "isVisible":$isVisible,"isOriginal":${opt.isOriginal},"weather":[$weatherJson]}"""
         }.joinToString(",", prefix = "[", postfix = "]")
 
+        val initialLat = userLocation?.first ?: 0.0
+        val initialLon = userLocation?.second ?: 0.0
+        val shouldCenter = centerOnUserRequested || options.isEmpty()
+
         """
         <!DOCTYPE html>
         <html>
@@ -107,7 +112,7 @@ fun MapPreview(
         <body>
             <div id="map"></div>
             <script>
-                var map = L.map('map').setView([0, 0], 2);
+                var map = L.map('map').setView([$initialLat, $initialLon], ${if (shouldCenter && initialLat != 0.0) 15 else 2});
                 
                 var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
                 var topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)' });
@@ -168,6 +173,11 @@ fun MapPreview(
                         }
                     } else if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
                 };
+                
+                // Set initial user marker if available
+                if ($initialLat !== 0.0 && $initialLon !== 0.0) {
+                    window.setUserLocation($initialLat, $initialLon, false);
+                }
 
                 var recordedLayer = null;
                 window.setRecordedPath = function(points) {
@@ -239,11 +249,23 @@ fun MapPreview(
                 } else {
                     setTimeout(function() { map.invalidateSize(); }, 200);
                 }
+                
+                if (window.Android) window.Android.onPageReady();
             </script>
         </body>
         </html>
         """.trimIndent()
     }
+
+    val currentState = remember { mutableStateOf(MapState()) }
+    currentState.value = MapState(
+        html = htmlContent, mapType = mapType, showWeather = showWeather,
+        selectedRouteIndex = selectedRouteIndex, highlightedRouteIndex = highlightedRouteIndex,
+        highlightedPointIndex = highlightedPointIndex, userLat = userLocation?.first,
+        userLng = userLocation?.second, recordedPath = recordedPath,
+        waypoints = waypoints, pois = pois,
+        centerOnUserRequested = centerOnUserRequested
+    )
 
     AndroidView(
         modifier = modifier,
@@ -256,6 +278,23 @@ fun MapPreview(
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
                 addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun onPageReady() {
+                        this@apply.post {
+                            val state = currentState.value
+                            this@apply.evaluateJavascript("setUserLocation(${state.userLat ?: "null"}, ${state.userLng ?: "null"}, ${state.centerOnUserRequested})", null)
+                            this@apply.evaluateJavascript("highlightRoute(${state.selectedRouteIndex})", null)
+                            this@apply.evaluateJavascript("setHighlightMarker(${state.highlightedRouteIndex}, ${state.highlightedPointIndex})", null)
+                            val pointsJson = state.recordedPath.joinToString(",", prefix = "[", postfix = "]") { "[${it.first},${it.second}]" }
+                            this@apply.evaluateJavascript("setRecordedPath($pointsJson)", null)
+                            val poisJson = state.pois.joinToString(",", prefix = "[", postfix = "]") { 
+                                """{"id":${it.id},"lat":${it.lat},"lon":${it.lon},"name":"${it.name.replace("\"", "\\\"")}","icon":"${it.type.icon}"}"""
+                            }
+                            this@apply.evaluateJavascript("setPois($poisJson)", null)
+                            val wptsJson = state.waypoints.joinToString(",", prefix = "[", postfix = "]") { "[${it.lat},${it.lon}]" }
+                            this@apply.evaluateJavascript("setWaypoints($wptsJson)", null)
+                        }
+                    }
                     @android.webkit.JavascriptInterface
                     fun selectRoute(index: Int) { onRouteSelected(index) }
                     @android.webkit.JavascriptInterface
@@ -349,7 +388,8 @@ private data class MapState(
     val userLng: Double? = null,
     val recordedPath: List<Pair<Double, Double>> = emptyList(),
     val waypoints: List<ch.tscsoft.gmaptogpx.data.models.Waypoint> = emptyList(),
-    val pois: List<Poi> = emptyList()
+    val pois: List<Poi> = emptyList(),
+    val centerOnUserRequested: Boolean = false
 )
 
 @Composable

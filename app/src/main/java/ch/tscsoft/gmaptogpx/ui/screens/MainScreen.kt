@@ -236,6 +236,16 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                         modifier = Modifier.fillMaxSize()
                     )
+                    Row(modifier = Modifier.padding(top = 100.dp, start = 8.dp).align(Alignment.TopStart)) {
+                        if (viewModel.waypoints.isNotEmpty() || viewModel.routeOptions.isNotEmpty()) {
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.clearWaypoints() },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Alles löschen", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                     Row(modifier = Modifier.padding(16.dp).align(Alignment.TopEnd)) {
                         MapLayerSelector(
                             currentType = viewModel.mapType,
@@ -399,6 +409,16 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                         modifier = Modifier.fillMaxSize()
                     )
+                    Row(modifier = Modifier.padding(top = 100.dp, start = 8.dp).align(Alignment.TopStart)) {
+                        if (viewModel.waypoints.isNotEmpty() || viewModel.routeOptions.isNotEmpty()) {
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.clearWaypoints() },
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Alles löschen", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                     Row(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
                         MapLayerSelector(
                             currentType = viewModel.mapType,
