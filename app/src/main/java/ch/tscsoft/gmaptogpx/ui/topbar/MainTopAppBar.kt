@@ -36,7 +36,7 @@ fun MainTopAppBar(
     CenterAlignedTopAppBar(
         title = {
             Text(
-                "GMap to GPX",
+                "Bike GPX",
                 style = MaterialTheme.typography.headlineMedium
             )
         },

@@ -65,7 +65,7 @@ class MapViewModel @Inject constructor(
     var poiJob: Job? = null
     // -------------------------
 
-    var status by mutableStateOf("Warte auf Google Maps Link...")
+    var status by mutableStateOf("Warte auf neue Eingabe.")
         private set
     var isProcessing by mutableStateOf(false)
         private set
@@ -160,7 +160,7 @@ class MapViewModel @Inject constructor(
         debugUrl = null
         highlightedPointIndex = null
         highlightedRouteIndex = null
-        status = "Warte auf Google Maps Link oder neue Punkte..."
+        status = "Warte auf neue Eingabe."
         centerOnUserRequested = true
     }
 
