@@ -45,6 +45,7 @@ class MapViewModel @Inject constructor(
     private var prefs: SharedPreferences? = null
     private var lastSharedText: String? = null
     private var lastPoints: List<Pair<Double, Double>> = emptyList()
+    private var calculationJob: Job? = null
 
     val allFolders: Flow<List<BookmarkFolder>> = repository.allFolders
     val rootBookmarks: Flow<List<BookmarkRoute>> = repository.rootBookmarks
@@ -208,61 +209,77 @@ class MapViewModel @Inject constructor(
             return
         }
 
+        calculationJob?.cancel()
         isProcessing = true
         status = "Berechne Route..."
-        viewModelScope.launch {
+        
+        calculationJob = viewModelScope.launch {
             try {
                 val coords = waypoints.map { it.lat to it.lon }
                 lastPoints = coords
-                val mainResult = bRouterService.getBikeRoute(coords, bikeProfile, 0)
+                
                 val options = mutableListOf<RouteOption>()
-                
-                val title = "Manuelle Route"
-                options.add(RouteOption(
-                    title = title,
-                    points = mainResult.points,
-                    altitudes = mainResult.altitudes,
-                    distances = mainResult.distances,
-                    gpxContent = GpxUtil.createGpx(mainResult.points, mainResult.altitudes, mainResult.segments, trackName = title),
-                    inputPoints = coords,
-                    alternativeIdx = 0,
-                    distanceMeters = mainResult.distance,
-                    elevationGain = mainResult.elevationGain,
-                    elevationLoss = mainResult.elevationLoss,
-                    totalTimeSeconds = mainResult.totalTimeSeconds,
-                    segments = mainResult.segments,
-                    surfaceSummary = bRouterService.createSurfaceSummary(mainResult.segments)
-                ))
-
-                // Add automatic alternatives if autoAltCount > 0
                 val profileName = getProfileLabel(bikeProfile)
-                for (i in 1..autoAltCount) {
-                    status = "Berechne $profileName Alternative $i..."
-                    val altResult = bRouterService.getBikeRoute(coords, bikeProfile, i)
-                    val altRoute = altResult.points
-                    if (altRoute != mainResult.points && altRoute != coords && options.none { it.points == altRoute }) {
-                        val altTitle = "Alternative $i"
-                        options.add(RouteOption(
-                            title = altTitle,
-                            points = altRoute,
-                            altitudes = altResult.altitudes,
-                            distances = altResult.distances,
-                            gpxContent = GpxUtil.createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle),
-                            inputPoints = coords,
-                            alternativeIdx = i,
-                            distanceMeters = altResult.distance,
-                            elevationGain = altResult.elevationGain,
-                            elevationLoss = altResult.elevationLoss,
-                            totalTimeSeconds = altResult.totalTimeSeconds,
-                            segments = altResult.segments,
-                            surfaceSummary = bRouterService.createSurfaceSummary(altResult.segments)
-                        ))
+
+                if (bikeProfile == "direct") {
+                    val title = "Manuelle Route (Direkt)"
+                    val dist = GpxUtil.calculateDistance(coords)
+                    val gpx = GpxUtil.createGpx(coords, trackName = title)
+                    options.add(RouteOption(title, coords, emptyList(), emptyList(), gpx, true, coords, distanceMeters = dist))
+                    routeOptions = options
+                    visibleRoutes = setOf(0)
+                    status = "Direkt-Route berechnet!"
+                } else {
+                    val mainResult = bRouterService.getBikeRoute(coords, bikeProfile, 0)
+                    val title = "Manuelle Route"
+                    options.add(RouteOption(
+                        title = title,
+                        points = mainResult.points,
+                        altitudes = mainResult.altitudes,
+                        distances = mainResult.distances,
+                        gpxContent = GpxUtil.createGpx(mainResult.points, mainResult.altitudes, mainResult.segments, trackName = title),
+                        inputPoints = coords,
+                        alternativeIdx = 0,
+                        distanceMeters = mainResult.distance,
+                        elevationGain = mainResult.elevationGain,
+                        elevationLoss = mainResult.elevationLoss,
+                        totalTimeSeconds = mainResult.totalTimeSeconds,
+                        segments = mainResult.segments,
+                        surfaceSummary = bRouterService.createSurfaceSummary(mainResult.segments)
+                    ))
+                    
+                    routeOptions = options.toList()
+                    visibleRoutes = setOf(0)
+                    status = "Hauptroute berechnet..."
+
+                    // Add automatic alternatives if autoAltCount > 0
+                    for (i in 1..autoAltCount) {
+                        status = "Berechne $profileName Alternative $i..."
+                        val altResult = bRouterService.getBikeRoute(coords, bikeProfile, i)
+                        val altRoute = altResult.points
+                        if (altRoute != mainResult.points && altRoute != coords && options.none { it.points == altRoute }) {
+                            val altTitle = "Alternative $i"
+                            options.add(RouteOption(
+                                title = altTitle,
+                                points = altRoute,
+                                altitudes = altResult.altitudes,
+                                distances = altResult.distances,
+                                gpxContent = GpxUtil.createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle),
+                                inputPoints = coords,
+                                alternativeIdx = i,
+                                distanceMeters = altResult.distance,
+                                elevationGain = altResult.elevationGain,
+                                elevationLoss = altResult.elevationLoss,
+                                totalTimeSeconds = altResult.totalTimeSeconds,
+                                segments = altResult.segments,
+                                surfaceSummary = bRouterService.createSurfaceSummary(altResult.segments)
+                            ))
+                            routeOptions = options.toList()
+                            visibleRoutes = options.indices.toSet()
+                        }
                     }
+                    status = if (options.size > 1) "Route mit Alternativen berechnet!" else "Route berechnet!"
                 }
-                
-                routeOptions = options
-                visibleRoutes = options.indices.toSet()
-                status = if (options.size > 1) "Route mit Alternativen berechnet!" else "Route berechnet!"
                 
                 if (showWeather) {
                     val updatedOptions = routeOptions.map { weatherService.fetchWeatherForRoute(it, showWeather, weatherStartTime) }
@@ -430,8 +447,12 @@ class MapViewModel @Inject constructor(
         bikeProfile = newProfile
         prefs?.edit()?.putString("bike_profile", newProfile)?.apply()
         
-        lastSharedText?.let {
-            processSharedText(it, context)
+        if (waypoints.isNotEmpty()) {
+            calculateRouteFromWaypoints()
+        } else {
+            lastSharedText?.let {
+                processSharedText(it, context)
+            }
         }
     }
 
@@ -439,8 +460,12 @@ class MapViewModel @Inject constructor(
         autoAltCount = count
         prefs?.edit()?.putInt("auto_alt_count", count)?.apply()
         
-        lastSharedText?.let {
-            processSharedText(it, context)
+        if (waypoints.isNotEmpty()) {
+            calculateRouteFromWaypoints()
+        } else {
+            lastSharedText?.let {
+                processSharedText(it, context)
+            }
         }
     }
 
@@ -525,7 +550,8 @@ class MapViewModel @Inject constructor(
         status = "Verarbeite Route..."
         routeOptions = emptyList()
 
-        viewModelScope.launch {
+        calculationJob?.cancel()
+        calculationJob = viewModelScope.launch {
             try {
                 var resolvedUrl = UrlResolver.resolveUrl(url)
                 debugUrl = resolvedUrl
@@ -541,9 +567,12 @@ class MapViewModel @Inject constructor(
 
                 if (points.isNotEmpty()) {
                     lastPoints = points
-                    // Convert points to waypoints with addresses
-                    waypoints = points.map { 
-                        Waypoint(it.first, it.second, LocationUtil.getFullAddress(it.first, it.second, context))
+                    // Convert points to waypoints with addresses in background
+                    status = "Suche Adressen..."
+                    waypoints = withContext(Dispatchers.IO) {
+                        points.map { 
+                            Waypoint(it.first, it.second, LocationUtil.getFullAddress(it.first, it.second, context))
+                        }
                     }
                     val options = mutableListOf<RouteOption>()
                     val isBRouter = resolvedUrl.contains("brouter.de/brouter-web")
@@ -764,8 +793,9 @@ class MapViewModel @Inject constructor(
     fun fetchAlternatives(context: Context) {
         if (lastPoints.isEmpty() || isProcessing) return
         
+        calculationJob?.cancel()
         isProcessing = true
-        viewModelScope.launch {
+        calculationJob = viewModelScope.launch {
             try {
                 val currentOptions = routeOptions.toMutableList()
                 val profileName = getProfileLabel(bikeProfile)
@@ -785,19 +815,17 @@ class MapViewModel @Inject constructor(
                     if (altRoute != lastPoints && altRoute != mainRoute && currentOptions.none { it.points == altRoute }) {
                         val altTitle = if (routeTitle != null) "Alt $i: $routeTitle" else "Alternative $i"
                         currentOptions.add(RouteOption(altTitle, altRoute, altResult.altitudes, altResult.distances, GpxUtil.createGpx(altRoute, altResult.altitudes, altResult.segments, trackName = altTitle), inputPoints = lastPoints, alternativeIdx = i, distanceMeters = altResult.distance, elevationGain = altResult.elevationGain, elevationLoss = altResult.elevationLoss, totalTimeSeconds = altResult.totalTimeSeconds, segments = altResult.segments, surfaceSummary = bRouterService.createSurfaceSummary(altResult.segments)))
+                        routeOptions = currentOptions.toList()
+                        visibleRoutes = currentOptions.indices.toSet()
                     }
                 }
-                routeOptions = currentOptions
-                visibleRoutes = currentOptions.indices.toSet()
                 status = "Alternativen geladen!"
 
                 if (showWeather) {
-                    viewModelScope.launch {
-                        val updatedOptions = routeOptions.map {
-                            if (it.weatherSamples.isEmpty()) weatherService.fetchWeatherForRoute(it, showWeather, weatherStartTime) else it
-                        }
-                        routeOptions = updatedOptions
+                    val updatedOptions = routeOptions.map {
+                        if (it.weatherSamples.isEmpty()) weatherService.fetchWeatherForRoute(it, showWeather, weatherStartTime) else it
                     }
+                    routeOptions = updatedOptions
                 }
             } catch (e: Exception) {
                 status = "Fehler: ${e.localizedMessage ?: e.message}"

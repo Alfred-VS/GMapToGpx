@@ -6,11 +6,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import ch.tscsoft.gmaptogpx.data.models.SearchSuggestion
 
@@ -21,6 +21,7 @@ fun SearchBar(
     onQueryChange: (String) -> Unit,
     suggestions: List<SearchSuggestion>,
     onSuggestionSelected: (SearchSuggestion) -> Unit,
+    onUseCurrentLocation: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var active by remember { mutableStateOf(false) }
@@ -52,6 +53,19 @@ fun SearchBar(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            item {
+                ListItem(
+                    headlineContent = { Text("Meine aktuelle Position", color = MaterialTheme.colorScheme.primary) },
+                    supportingContent = { Text("Aktuellen Standort als Wegpunkt nutzen") },
+                    leadingContent = { Icon(Icons.Default.MyLocation, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    modifier = Modifier.clickable {
+                        onUseCurrentLocation()
+                        active = false
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            }
+
             items(suggestions) { suggestion ->
                 ListItem(
                     headlineContent = { Text(suggestion.name) },

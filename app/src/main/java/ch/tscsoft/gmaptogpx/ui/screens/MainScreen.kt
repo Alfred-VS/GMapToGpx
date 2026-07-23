@@ -158,6 +158,16 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     suggestions = viewModel.searchSuggestions,
                     onSuggestionSelected = { 
                         selectedSuggestion = it
+                    },
+                    onUseCurrentLocation = {
+                        viewModel.userLocation?.let { loc ->
+                            selectedSuggestion = ch.tscsoft.gmaptogpx.data.models.SearchSuggestion(
+                                name = "Meine Position",
+                                description = "Aktueller Standort",
+                                lat = loc.first,
+                                lon = loc.second
+                            )
+                        }
                     }
                 )
             }
@@ -360,6 +370,16 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     suggestions = viewModel.searchSuggestions,
                     onSuggestionSelected = { 
                         selectedSuggestion = it
+                    },
+                    onUseCurrentLocation = {
+                        viewModel.userLocation?.let { loc ->
+                            selectedSuggestion = ch.tscsoft.gmaptogpx.data.models.SearchSuggestion(
+                                name = "Meine Position",
+                                description = "Aktueller Standort",
+                                lat = loc.first,
+                                lon = loc.second
+                            )
+                        }
                     },
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
