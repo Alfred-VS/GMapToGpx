@@ -203,7 +203,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                         modifier = Modifier.fillMaxSize()
                     )
-                    Row(modifier = Modifier.padding(top = 100.dp, start = 8.dp).align(Alignment.TopStart)) {
+                    Row(modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) {
                         if (viewModel.waypoints.isNotEmpty() || viewModel.routeOptions.isNotEmpty()) {
                             SmallFloatingActionButton(
                                 onClick = { viewModel.clearWaypoints() },
@@ -361,7 +361,7 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         onWaypointMoved = { index, lat, lon -> viewModel.updateWaypoint(index, lat, lon, context) },
                         modifier = Modifier.fillMaxSize()
                     )
-                    Row(modifier = Modifier.padding(top = 100.dp, start = 8.dp).align(Alignment.TopStart)) {
+                    Row(modifier = Modifier.padding(8.dp).align(Alignment.TopStart)) {
                         if (viewModel.waypoints.isNotEmpty() || viewModel.routeOptions.isNotEmpty()) {
                             SmallFloatingActionButton(
                                 onClick = { viewModel.clearWaypoints() },
@@ -574,13 +574,13 @@ fun MainScreen(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                     }
                 }
 
-                if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
+                /*if (viewModel.routeOptions.isEmpty() && !viewModel.isProcessing) {
                     Text(
                         text = "Teile einen Ort aus Google Maps mit dieser App, um eine GPX Datei zu erstellen.",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 32.dp)
                     )
-                }
+                }*/
             }
         }
 

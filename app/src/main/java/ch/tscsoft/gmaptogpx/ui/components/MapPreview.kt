@@ -112,7 +112,7 @@ fun MapPreview(
         <body>
             <div id="map"></div>
             <script>
-                var map = L.map('map').setView([$initialLat, $initialLon], ${if (shouldCenter && initialLat != 0.0) 15 else 2});
+                var map = L.map('map', { zoomControl: false }).setView([$initialLat, $initialLon], ${if (shouldCenter && initialLat != 0.0) 15 else 2});
                 
                 var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
                 var topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)' });
